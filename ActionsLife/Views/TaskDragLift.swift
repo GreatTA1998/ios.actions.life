@@ -757,6 +757,14 @@ struct HourDurationPanBridge: UIViewRepresentable {
             trackedTouch = touch
             // 16pt handle only (`28ee931` tap path). Do not bind to the
             // whole `calendar.timed.*` card / StaticText title.
+            startDurationSession(scroll: scroll, touch: touch)
+            attachHourPanFollow(to: scroll)
+        }
+
+        /// Same pin that holds hours: start the duration session so follow
+        /// has a `task.id` (`dd62490` pinned with no id → `setDuration` no-op).
+        func startDurationSession(scroll: UIScrollView?, touch: UITouch) {
+            if capturedTaskID != nil { return }
             if let scroll {
                 let location = touch.location(in: scroll)
                 let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: location)
@@ -764,16 +772,33 @@ struct HourDurationPanBridge: UIViewRepresentable {
                     from: view,
                     locationInScroll: location,
                     in: scroll
-                ), case .capsule(let taskID) = painted {
-                    capturedTaskID = taskID
-                    capturedStartDuration = capsuleTarget(taskID: taskID).duration
+                ) {
+                    if case .capsule(let taskID) = painted {
+                        beginDurationSession(taskID: taskID)
+                    }
+                    // `.blockBody` is the title StaticText — Details, not duration.
+                    return
+                }
+                if let window = resolvedWindow(for: touch),
+                   let taskID = CalendarLayout.handleTaskID(
+                    windowPoint: touch.location(in: window),
+                    in: scroll,
+                    window: window
+                   )
+                {
+                    beginDurationSession(taskID: taskID)
+                    return
                 }
             }
-            if capturedTaskID == nil, let hit = pendingHit ?? claimedTarget {
-                capturedTaskID = hit.taskID
-                capturedStartDuration = hit.duration
+            if let hit = pendingHit ?? claimedTarget {
+                beginDurationSession(taskID: hit.taskID, duration: hit.duration)
             }
-            attachHourPanFollow(to: scroll)
+        }
+
+        func beginDurationSession(taskID: String, duration: Double? = nil) {
+            guard !taskID.isEmpty else { return }
+            capturedTaskID = taskID
+            capturedStartDuration = duration ?? capsuleTarget(taskID: taskID).duration
         }
 
         /// Claim/pin path: remember the 16pt handle `task.id` so the hour

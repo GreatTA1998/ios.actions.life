@@ -1031,7 +1031,7 @@ final class CalendarLayoutTests: XCTestCase {
         let beganWindowY: CGFloat = 320
         let fingerWindowY: CGFloat = 400
         let deltaY = fingerWindowY - beganWindowY
-        XCTAssertEqual(deltaY, 80, accuracy: 0.01)
+        XCTAssertEqual(deltaY, 80 as CGFloat, accuracy: 0.01)
         let minutes = CalendarLayout.paintedHandleMinutes(
             start: 30,
             windowDeltaY: deltaY,
@@ -1133,6 +1133,55 @@ final class CalendarLayoutTests: XCTestCase {
             .capsule(taskID: "2860CA86"),
             "16pt handle below the title is duration"
         )
+    }
+
+    func testWindowHandleHitStartsDurationSessionNotTitle() {
+        // `dd62490`: claim pinned hours with no task.id so setDuration no-op'd.
+        // Other bottom 16pt `calendar.capsule.*` starts the session.
+        let host = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 800))
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        scroll.contentSize = CGSize(width: 390, height: 1200)
+        host.addSubview(scroll)
+        let card = UIView(frame: CGRect(x: 50, y: 284, width: 168, height: 39.3))
+        card.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        scroll.addSubview(card)
+        let title = UIView(frame: CGRect(x: 37.3, y: 4, width: 122.7, height: 18))
+        title.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        card.addSubview(title)
+        let handle = UIView(frame: CGRect(x: 0, y: 39.3 - 16, width: 168, height: 16))
+        handle.accessibilityIdentifier = CalendarLayout.timedCapsuleAccessibilityID("pr3")
+        card.addSubview(handle)
+        host.layoutIfNeeded()
+
+        let handleWindow = handle.convert(CGPoint(x: 84, y: 8), to: host)
+        XCTAssertEqual(
+            CalendarLayout.handleTaskID(windowPoint: handleWindow, in: scroll, window: host),
+            "pr3"
+        )
+        let titleWindow = title.convert(CGPoint(x: 61, y: 9), to: host)
+        XCTAssertNil(
+            CalendarLayout.handleTaskID(windowPoint: titleWindow, in: scroll, window: host),
+            "title StaticText must not start a duration session"
+        )
+
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { [] },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: 50,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { _, _ in },
+            onEnded: { _, _ in },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        XCTAssertNil(coordinator.followTaskID())
+        coordinator.beginDurationSession(taskID: "pr3")
+        XCTAssertEqual(coordinator.followTaskID(), "pr3")
     }
 
     func testCapsulePanTranslationGrowsBlockPastThirtyMinutes() {

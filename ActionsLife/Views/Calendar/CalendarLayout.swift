@@ -520,6 +520,50 @@ enum CalendarLayout {
 
     /// Bottom 16pt of the painted card in the scroller's space (`94e965c`
     /// a11y card `(50, 280.3, 168, 39.3)` → capsule y≈303.6–319.6).
+    /// XCUI Other bottom 16pt (`calendar.capsule.*`) in **window** space.
+    /// Title StaticText (`height < 24`) is not a duration session.
+    static func handleTaskID(
+        windowPoint: CGPoint,
+        in scroll: UIScrollView,
+        window: UIView
+    ) -> String? {
+        var found: String?
+        func walk(_ view: UIView) {
+            if found != nil { return }
+            if view.bounds.width < 2 || view.bounds.height < 2 {
+                view.subviews.forEach(walk)
+                return
+            }
+            let rect = view.convert(view.bounds, to: window)
+            if !rect.insetBy(dx: -2, dy: -2).contains(windowPoint) {
+                view.subviews.forEach(walk)
+                return
+            }
+            if let id = view.accessibilityIdentifier, !id.isEmpty {
+                if id.hasPrefix(timedCapsuleAccessibilityPrefix) {
+                    let taskID = String(id.dropFirst(timedCapsuleAccessibilityPrefix.count))
+                    if !taskID.isEmpty {
+                        found = taskID
+                        return
+                    }
+                }
+                if id.hasPrefix(timedCardAccessibilityPrefix), view.bounds.height >= 24 {
+                    let local = window.convert(windowPoint, to: view)
+                    if local.y >= view.bounds.height - 16 - 0.5 {
+                        let taskID = String(id.dropFirst(timedCardAccessibilityPrefix.count))
+                        if !taskID.isEmpty {
+                            found = taskID
+                            return
+                        }
+                    }
+                }
+            }
+            view.subviews.forEach(walk)
+        }
+        walk(scroll)
+        return found
+    }
+
     static func paintedCapsuleBand(of card: UIView, in scroll: UIScrollView) -> CGRect {
         let rect = card.convert(card.bounds, to: scroll)
         return CGRect(
