@@ -52,6 +52,36 @@ final class DragDropTests: XCTestCase {
         XCTAssertEqual(target, .allDay("2026-09-18"))
     }
 
+    func testListSlotBeatsBroadListZone() {
+        let zones = [
+            HomeChrome.DropZone(kind: .list, frame: CGRect(x: 0, y: 400, width: 400, height: 400)),
+            HomeChrome.DropZone(kind: .listSlot(parentID: "", index: 2), frame: CGRect(x: 12, y: 480, width: 360, height: 22))
+        ]
+        let target = DropMath.target(
+            ghostTop: CGPoint(x: 40, y: 486),
+            ghostSize: CGSize(width: 200, height: 36),
+            zones: zones,
+            pixelsPerHour: 50,
+            snap: 15
+        )
+        XCTAssertEqual(target, .listSlot(parentID: "", index: 2))
+    }
+
+    func testNestBeatsTimedCanvas() {
+        let zones = [
+            HomeChrome.DropZone(kind: .timed("2026-09-18"), frame: CGRect(x: 40, y: 80, width: 200, height: 1200)),
+            HomeChrome.DropZone(kind: .nest("parent-1"), frame: CGRect(x: 48, y: 300, width: 180, height: 48))
+        ]
+        let target = DropMath.target(
+            ghostTop: CGPoint(x: 80, y: 310),
+            ghostSize: CGSize(width: 160, height: 40),
+            zones: zones,
+            pixelsPerHour: 50,
+            snap: 15
+        )
+        XCTAssertEqual(target, .nest("parent-1"))
+    }
+
     func testListDropUnscheduleTarget() {
         let zones = [
             HomeChrome.DropZone(kind: .list, frame: CGRect(x: 0, y: 400, width: 400, height: 400)),

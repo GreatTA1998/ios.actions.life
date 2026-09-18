@@ -52,6 +52,17 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(CalendarLayout.hourLabel(0), "0")
     }
 
+    func testDayWindowIsPastPlusTodayPlusFuture() {
+        let calendar = Calendar(identifier: .gregorian)
+        var comps = DateComponents(year: 2026, month: 9, day: 18)
+        comps.timeZone = calendar.timeZone
+        let now = calendar.date(from: comps) ?? Date()
+        let days = CalendarLayout.dayWindow(around: now, past: 2, future: 3, calendar: calendar)
+        XCTAssertEqual(days.count, 6)
+        XCTAssertEqual(DateISO.dayString(from: days.first ?? now, calendar: calendar), "2026-09-16")
+        XCTAssertEqual(DateISO.dayString(from: days.last ?? now, calendar: calendar), "2026-09-21")
+    }
+
     private func event(id: String = "timed", time: String, duration: Double) -> TaskSnapshot {
         TaskSnapshot(
             id: id,

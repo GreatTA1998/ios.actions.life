@@ -17,6 +17,8 @@ final class HomeChrome {
     struct DropZone: Equatable {
         enum Kind: Equatable {
             case list
+            case listSlot(parentID: String, index: Int)
+            case nest(String)
             case allDay(String)
             case timed(String)
         }
@@ -29,6 +31,7 @@ final class HomeChrome {
         var taskID: String
         var name: String
         var duration: Double
+        var fromCalendar: Bool
         var finger: CGPoint
         var grabOffset: CGSize
         var ghostSize: CGSize
@@ -38,6 +41,8 @@ final class HomeChrome {
     enum DropTarget: Equatable {
         case none
         case list
+        case listSlot(parentID: String, index: Int)
+        case nest(String)
         case allDay(String)
         case timed(dayISO: String, minutes: Int)
     }
@@ -50,11 +55,19 @@ final class HomeChrome {
         )
     }
 
-    func beginDrag(taskID: String, name: String, duration: Double, finger: CGPoint, frame: CGRect) {
+    func beginDrag(
+        taskID: String,
+        name: String,
+        duration: Double,
+        finger: CGPoint,
+        frame: CGRect,
+        fromCalendar: Bool = false
+    ) {
         drag = DragSession(
             taskID: taskID,
             name: name,
             duration: duration,
+            fromCalendar: fromCalendar,
             finger: finger,
             grabOffset: CGSize(width: finger.x - frame.minX, height: finger.y - frame.minY),
             ghostSize: CGSize(width: max(frame.width, 80), height: max(frame.height, 36))
@@ -106,7 +119,20 @@ final class HomeChrome {
     }
 
     func showsListPreview() -> Bool {
-        drag?.target == .list
+        switch drag?.target {
+        case .list, .listSlot, .nest:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func showsSlotPreview(parentID: String, index: Int) -> Bool {
+        drag?.target == .listSlot(parentID: parentID, index: index)
+    }
+
+    func showsNestPreview(for taskID: String) -> Bool {
+        drag?.target == .nest(taskID)
     }
 }
 
@@ -125,11 +151,17 @@ enum DropMath {
         snap: Int
     ) -> HomeChrome.DropTarget {
         let probe = CGRect(x: ghostTop.x, y: ghostTop.y, width: max(ghostSize.width, 8), height: 2)
+        var nest: HomeChrome.DropZone?
+        var listSlot: HomeChrome.DropZone?
         var timed: HomeChrome.DropZone?
         var allDay: HomeChrome.DropZone?
         var list: HomeChrome.DropZone?
         for zone in zones where zone.frame.intersects(probe) {
             switch zone.kind {
+            case .nest:
+                nest = zone
+            case .listSlot:
+                listSlot = zone
             case .timed:
                 timed = zone
             case .allDay:
@@ -137,6 +169,12 @@ enum DropMath {
             case .list:
                 list = zone
             }
+        }
+        if let nest, case .nest(let taskID) = nest.kind {
+            return .nest(taskID)
+        }
+        if let listSlot, case .listSlot(let parentID, let index) = listSlot.kind {
+            return .listSlot(parentID: parentID, index: index)
         }
         if let timed, case .timed(let dayISO) = timed.kind {
             let localY = canvasY(globalY: ghostTop.y, canvasGlobalMinY: timed.frame.minY)

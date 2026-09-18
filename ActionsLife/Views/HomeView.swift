@@ -10,9 +10,8 @@ struct HomeView: View {
     @State private var selectedDay = Calendar.current.startOfDay(for: .now)
     @State private var selectedTaskID: String?
     @State private var composerText = ""
-    @State private var showComposer = false
+    @State private var composer: ComposerSlot?
     @State private var showMenu = false
-    @State private var composerParentID = ""
     @State private var chrome = HomeChrome()
 
     var body: some View {
@@ -64,11 +63,10 @@ struct HomeView: View {
                             InboxView(
                                 store: store,
                                 selectedTaskID: $selectedTaskID,
-                                onAddRoot: { showComposer = true; composerParentID = "" },
-                                onAddChild: { parent in
-                                    composerParentID = parent
-                                    showComposer = true
-                                }
+                                composer: $composer,
+                                composerText: $composerText,
+                                onCommitComposer: { commitComposer(store) },
+                                onCancelComposer: cancelComposer
                             )
                             .frame(maxHeight: .infinity)
                             .scrollDisabled(chrome.pointerCaptured)
@@ -88,8 +86,8 @@ struct HomeView: View {
                     }
                     .confirmationDialog("actions.life", isPresented: $showMenu, titleVisibility: .visible) {
                         Button("Add task") {
-                            composerParentID = ""
-                            showComposer = true
+                            composerText = ""
+                            composer = ComposerSlot(parentID: "", index: store.inbox.count)
                         }
                         Button("Jump to today") {
                             selectedDay = Calendar.current.startOfDay(for: .now)
@@ -109,23 +107,6 @@ struct HomeView: View {
             }
             .background(Theme.listBackground.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
-            .alert("New task", isPresented: $showComposer) {
-                TextField("Task name", text: $composerText)
-                Button("Add") {
-                    let name = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !name.isEmpty {
-                        store?.create(name: name, parentID: composerParentID)
-                    }
-                    composerText = ""
-                    composerParentID = ""
-                }
-                Button("Cancel", role: .cancel) {
-                    composerText = ""
-                    composerParentID = ""
-                }
-            } message: {
-                Text(composerParentID.isEmpty ? "Added to the list." : "Nested under the selected task.")
-            }
         }
         .onAppear {
             if store == nil {
@@ -158,6 +139,22 @@ struct HomeView: View {
             }
             .allowsHitTesting(false)
         }
+    }
+
+    private func commitComposer(_ store: TaskTreeStore) {
+        let name = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty, let slot = composer {
+            if !slot.parentID.isEmpty {
+                store.setCollapsed(slot.parentID, isCollapsed: false)
+            }
+            store.create(name: name, parentID: slot.parentID, insertIndex: slot.index)
+        }
+        cancelComposer()
+    }
+
+    private func cancelComposer() {
+        composerText = ""
+        composer = nil
     }
 
     private func selectedTaskBinding(_ store: TaskTreeStore) -> Binding<TaskIdentity?> {

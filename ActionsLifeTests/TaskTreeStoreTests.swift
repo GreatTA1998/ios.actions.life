@@ -82,4 +82,22 @@ final class TaskTreeStoreTests: XCTestCase {
         XCTAssertEqual(CalendarLayout.split(tasks: store.tasks(on: "2026-09-26")).timed.map(\.id), [task.id])
         XCTAssertEqual(store.lastScheduledISO, "2026-09-26")
     }
+
+    func testCreateInsertsAtDropzoneIndexAndNestDropMakesSubtask() throws {
+        let container = Persistence.makeContainer(inMemory: true, name: "dropzone-create")
+        let context = ModelContext(container)
+        context.insert(UserProfile(uid: "slot-user"))
+        try context.save()
+
+        let store = TaskTreeStore(context: context, uid: "slot-user")
+        store.create(name: "First")
+        store.create(name: "Third")
+        store.create(name: "Second", insertIndex: 1)
+        XCTAssertEqual(store.inbox.map(\.task.name), ["First", "Second", "Third"])
+
+        let child = store.create(name: "Nested later")
+        store.applyDrop(.nest(store.inbox[0].id), taskID: child.id)
+        XCTAssertEqual(store.inbox.map(\.task.name), ["First", "Second", "Third"])
+        XCTAssertEqual(store.inbox[0].children.map(\.task.name), ["Nested later"])
+    }
 }

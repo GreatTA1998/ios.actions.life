@@ -4,6 +4,7 @@ struct TaskDragLift: ViewModifier {
     let taskID: String
     let name: String
     let duration: Double
+    var fromCalendar: Bool = false
     var onDrop: (HomeChrome.DropTarget) -> Void
 
     @Environment(HomeChrome.self) private var chrome
@@ -39,7 +40,8 @@ struct TaskDragLift: ViewModifier {
                             name: name,
                             duration: duration,
                             finger: drag.location,
-                            frame: frame
+                            frame: frame,
+                            fromCalendar: fromCalendar
                         )
                     } else {
                         chrome.moveDrag(finger: drag.location)
@@ -64,9 +66,10 @@ extension View {
         id: String,
         name: String,
         duration: Double,
+        fromCalendar: Bool = false,
         onDrop: @escaping (HomeChrome.DropTarget) -> Void
     ) -> some View {
-        modifier(TaskDragLift(taskID: id, name: name, duration: duration, onDrop: onDrop))
+        modifier(TaskDragLift(taskID: id, name: name, duration: duration, fromCalendar: fromCalendar, onDrop: onDrop))
     }
 }
 
