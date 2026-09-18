@@ -10,42 +10,39 @@ struct InboxView: View {
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
+        ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(store.inbox.enumerated()), id: \.element.id) { index, tree in
-                            composerOrDropzone(parentID: "", index: index, isRoot: true)
-                            TaskRowView(
-                                tree: tree,
-                                depth: 0,
-                                store: store,
-                                selectedTaskID: $selectedTaskID,
-                                composer: $composer,
-                                composerText: $composerText,
-                                onCommitComposer: onCommitComposer,
-                                onCancelComposer: onCancelComposer
-                            )
-                        }
-                        composerOrDropzone(
-                            parentID: "",
-                            index: store.inbox.count,
-                            isRoot: true,
-                            fillRemaining: true
-                        )
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
-                    .padding(.bottom, 28)
+                ForEach(Array(store.inbox.enumerated()), id: \.element.id) { index, tree in
+                    composerOrDropzone(parentID: "", index: index, isRoot: true)
+                    TaskRowView(
+                        tree: tree,
+                        depth: 0,
+                        store: store,
+                        selectedTaskID: $selectedTaskID,
+                        composer: $composer,
+                        composerText: $composerText,
+                        onCommitComposer: onCommitComposer,
+                        onCancelComposer: onCancelComposer
+                    )
                 }
-                .scrollDisabled(chrome.pointerCaptured)
+                composerOrDropzone(
+                    parentID: "",
+                    index: store.inbox.count,
+                    isRoot: true,
+                    fillRemaining: true
+                )
             }
-
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 28)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .scrollDisabled(chrome.pointerCaptured)
+        .overlay(alignment: .center) {
             if store.inbox.isEmpty, composer == nil {
-                Text("Tap an empty space to add a task")
+                Text("Tap a gap to add a task")
                     .font(.subheadline)
                     .foregroundStyle(Theme.secondaryInk)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .allowsHitTesting(false)
             }
         }

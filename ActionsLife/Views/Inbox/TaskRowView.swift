@@ -96,7 +96,7 @@ struct TaskRowView: View {
 
             if !tree.task.isCollapsed {
                 ForEach(Array(tree.children.enumerated()), id: \.element.id) { index, child in
-                    composerOrDropzone(parentID: tree.id, index: index)
+                    composerOrDropzone(parentID: tree.id, index: index, ghost: false)
                     TaskRowView(
                         tree: child,
                         depth: depth + 1,
@@ -108,13 +108,14 @@ struct TaskRowView: View {
                         onCancelComposer: onCancelComposer
                     )
                 }
-                composerOrDropzone(parentID: tree.id, index: tree.children.count)
+                // Web `ghost-negative`: trailing zone overhangs so the last gap stays tappable.
+                composerOrDropzone(parentID: tree.id, index: tree.children.count, ghost: true)
             }
         }
     }
 
     @ViewBuilder
-    private func composerOrDropzone(parentID: String, index: Int) -> some View {
+    private func composerOrDropzone(parentID: String, index: Int, ghost: Bool) -> some View {
         if composer == ComposerSlot(parentID: parentID, index: index) {
             InlineTaskComposer(
                 text: $composerText,
@@ -123,10 +124,12 @@ struct TaskRowView: View {
                 onCancel: onCancelComposer
             )
             .padding(.leading, CGFloat(depth + 1) * 18)
+            .zIndex(4)
         } else {
-            ListDropzone(parentID: parentID, index: index, isRoot: false) {
+            ListDropzone(parentID: parentID, index: index, isRoot: false, ghost: ghost) {
                 composerText = ""
                 composer = ComposerSlot(parentID: parentID, index: index)
+                store.setCollapsed(parentID, isCollapsed: false)
             }
             .padding(.leading, CGFloat(depth + 1) * 18)
         }

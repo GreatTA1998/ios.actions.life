@@ -258,8 +258,8 @@ final class TaskTreeStore {
         create(name: name, parentID: parentID, onList: true, insertIndex: insertIndex)
     }
 
-    func setListHeightSplit(_ value: Double) {
-        listHeightSplit = min(0.85, max(0.25, value))
+    func setListHeightSplit(_ value: Double, height: CGFloat = 800) {
+        listHeightSplit = HomeChrome.clampSplitFraction(value, height: height)
         if let profile {
             profile.listHeightSplit = listHeightSplit
             profile.updatedAt = .now
@@ -267,8 +267,8 @@ final class TaskTreeStore {
         try? context.save()
     }
 
-    func setListHeightSplitLive(_ value: Double) {
-        listHeightSplit = min(0.85, max(0.25, value))
+    func setListHeightSplitLive(_ value: Double, height: CGFloat = 800) {
+        listHeightSplit = HomeChrome.clampSplitFraction(value, height: height)
     }
 
     func seedGuestDataIfNeeded() {

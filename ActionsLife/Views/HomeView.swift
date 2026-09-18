@@ -13,14 +13,21 @@ struct HomeView: View {
     @State private var composer: ComposerSlot?
     @State private var showMenu = false
     @State private var chrome = HomeChrome()
+    /// Local split while dragging the handle (Expo SplitPane `visual`).
+    @State private var visualSplit: Double?
+    @State private var splitDragStart: Double = 0.5
+    @State private var edgeTick = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         NavigationStack {
             Group {
                 if let store {
                     GeometryReader { geo in
-                        let split = store.listHeightSplit
-                        let calendarHeight = max(240, geo.size.height * (1 - split))
+                        let split = visualSplit ?? store.listHeightSplit
+                        let handle = HomeChrome.splitHandle
+                        let remaining = max(1, geo.size.height - handle)
+                        let listHeight = remaining * split
+                        let calendarHeight = remaining - listHeight
                         let columnWidth = min(
                             max(store.profile?.calColumnWidth ?? 220, 180),
                             geo.size.width - CalendarLayout.timeAxisWidth - 20
@@ -36,28 +43,22 @@ struct HomeView: View {
                                 },
                                 onMenu: { showMenu = true }
                             )
-                            .frame(height: calendarHeight)
-                            .scrollDisabled(chrome.pointerCaptured)
+                            .frame(height: max(0, calendarHeight))
+                            .clipped()
+                            .background {
+                                PaneFrameReporter(pane: .calendar) { chrome.calendarPane = $0 }
+                            }
+                            .background {
+                                ScrollEdgeBridge(
+                                    delta: chrome.calendarScrollDelta,
+                                    generation: chrome.edgeScrollGeneration
+                                )
+                            }
                             .allowsHitTesting(!chrome.isResizing)
 
                             SplitHandle()
-                                .highPriorityGesture(
-                                    DragGesture(minimumDistance: 0, coordinateSpace: .named("homeSplit"))
-                                        .onChanged { value in
-                                            chrome.isResizing = true
-                                            var transaction = Transaction()
-                                            transaction.disablesAnimations = true
-                                            withTransaction(transaction) {
-                                                store.setListHeightSplitLive(
-                                                    1 - value.location.y / geo.size.height
-                                                )
-                                            }
-                                        }
-                                        .onEnded { _ in
-                                            chrome.isResizing = false
-                                            store.setListHeightSplit(store.listHeightSplit)
-                                        }
-                                )
+                                .frame(height: handle)
+                                .gesture(splitGesture(height: geo.size.height, store: store))
                                 .allowsHitTesting(chrome.drag == nil)
 
                             InboxView(
@@ -68,19 +69,46 @@ struct HomeView: View {
                                 onCommitComposer: { commitComposer(store) },
                                 onCancelComposer: cancelComposer
                             )
-                            .frame(maxHeight: .infinity)
-                            .scrollDisabled(chrome.pointerCaptured)
+                            .frame(height: max(0, listHeight))
+                            .clipped()
+                            .background {
+                                PaneFrameReporter(pane: .list) { chrome.listPane = $0 }
+                            }
+                            .background {
+                                ScrollEdgeBridge(
+                                    delta: chrome.listScrollDelta,
+                                    generation: chrome.edgeScrollGeneration
+                                )
+                            }
                             .allowsHitTesting(!chrome.isResizing)
                         }
                         .coordinateSpace(name: "homeSplit")
+                        .background {
+                            PaneFrameReporter(pane: .home) { chrome.homeFrame = $0 }
+                        }
                         .onAppear {
                             chrome.pixelsPerHour = store.profile?.pixelsPerHour ?? 50
                             chrome.snapInterval = max(Int(store.profile?.calSnapInterval ?? 15), 5)
+                            if visualSplit == nil {
+                                visualSplit = HomeChrome.clampSplitFraction(
+                                    store.listHeightSplit,
+                                    height: geo.size.height
+                                )
+                            }
+                        }
+                        .onChange(of: store.listHeightSplit) { _, value in
+                            guard !chrome.isResizing else { return }
+                            visualSplit = HomeChrome.clampSplitFraction(value, height: geo.size.height)
                         }
                     }
                     .environment(chrome)
                     .onPreferenceChange(DropZonePreferenceKey.self) { chrome.zones = $0 }
                     .overlay { dragGhost }
+                    .onReceive(edgeTick) { _ in
+                        guard chrome.drag != nil, let finger = chrome.drag?.finger else { return }
+                        chrome.updateEdgeScroll(finger: finger)
+                        chrome.moveDrag(finger: finger)
+                    }
                     .sheet(item: selectedTaskBinding(store)) { record in
                         TaskDetailSheet(store: store, taskID: record.id)
                     }
@@ -117,6 +145,33 @@ struct HomeView: View {
         }
     }
 
+    private func splitGesture(height: CGFloat, store: TaskTreeStore) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named("homeSplit"))
+            .onChanged { value in
+                if !chrome.isResizing {
+                    chrome.isResizing = true
+                    splitDragStart = visualSplit ?? store.listHeightSplit
+                }
+                let remaining = max(1, height - HomeChrome.splitHandle)
+                // Moving handle down grows the list (Expo: start - dy/remaining).
+                let next = HomeChrome.clampSplitFraction(
+                    splitDragStart + Double(value.translation.height / remaining),
+                    height: height
+                )
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    visualSplit = next
+                }
+            }
+            .onEnded { _ in
+                chrome.isResizing = false
+                let value = visualSplit ?? store.listHeightSplit
+                store.setListHeightSplit(value, height: height)
+                visualSplit = store.listHeightSplit
+            }
+    }
+
     @ViewBuilder
     private var dragGhost: some View {
         if let drag = chrome.drag {
@@ -133,7 +188,7 @@ struct HomeView: View {
                             .padding(.vertical, 8)
                     }
                     .frame(width: drag.ghostSize.width, height: drag.ghostSize.height, alignment: .topLeading)
-                    .opacity(0.5)
+                    .opacity(0.55)
                     .shadow(color: .black.opacity(0.12), radius: 12, y: 8)
                     .offset(x: top.x - origin.minX, y: top.y - origin.minY)
             }
@@ -183,7 +238,6 @@ private struct SplitHandle: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 36)
         .contentShape(Rectangle())
         .accessibilityLabel("Resize list")
     }

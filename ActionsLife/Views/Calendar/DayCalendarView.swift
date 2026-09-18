@@ -25,7 +25,6 @@ struct DayCalendarView: View {
             topChrome
         }
         .background(Theme.calendarBackground)
-        .scrollDisabled(chrome.pointerCaptured)
     }
 
     private var calendarScroll: some View {
