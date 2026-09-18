@@ -195,8 +195,8 @@ final class DragDropTests: XCTestCase {
     }
 
     func testDurationPanDownLengthensBlock() {
-        // Hour-scroller pan translation.y → setDuration (`1fc1511` scrolled
-        // hours without committing; card UIControl was not under the finger).
+        // Hour-capsule pan translation.y → setDuration. The 16pt layout
+        // child under the painted pixels must be the view that pans.
         let chrome = HomeChrome()
         chrome.pixelsPerHour = 50
         chrome.snapInterval = 15

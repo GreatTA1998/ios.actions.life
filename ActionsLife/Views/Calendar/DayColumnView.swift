@@ -120,7 +120,8 @@ struct DayColumnView: View {
                         onToggle: { store.toggleDone(event.task.id) },
                         onOpen: { selectedTaskID = event.task.id },
                         onToggleChild: { store.toggleDone($0) },
-                        onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) }
+                        onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) },
+                        onResizeDuration: { store.setDuration(event.task.id, minutes: $0) }
                     )
                     .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
                     .padding(.leading, 6)
@@ -168,18 +169,11 @@ struct DayColumnView: View {
         .gesture(
             SpatialTapGesture().onEnded { event in
                 guard chrome.drag == nil, !chrome.isResizing, chrome.durationResize == nil else { return }
-                if let hit = placed.first(where: {
+                // Empty hours only. Card-body onTapGesture opens Details
+                // (`e2fba41`/`c7a355e`). Do not treat a painted-card tap as create.
+                if placed.contains(where: {
                     CalendarLayout.blockContains(location: event.location, event: $0, columnWidth: columnWidth)
                 }) {
-                    let capsule = CalendarLayout.durationCapsuleRect(
-                        columnIndex: 0,
-                        columnWidth: columnWidth,
-                        event: hit
-                    )
-                    if CalendarLayout.touchHitsCapsule(event.location, capsule: capsule) {
-                        return
-                    }
-                    selectedTaskID = hit.task.id
                     return
                 }
                 let minutes = CalendarLayout.minutes(

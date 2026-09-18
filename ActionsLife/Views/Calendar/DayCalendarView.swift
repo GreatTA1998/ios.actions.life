@@ -143,19 +143,15 @@ struct DayCalendarView: View {
     }
 
     private func hourScroll(timedHeight: CGFloat) -> some View {
-        let treeStore = store
-        let homeChrome = chrome
-        let dayISOs = days.map { DateISO.dayString(from: $0) }
-        let pixels = pixelsPerHour
-        return ScrollViewReader { vProxy in
+        ScrollViewReader { vProxy in
             ScrollView(.vertical, showsIndicators: false) {
                 ZStack(alignment: .topLeading) {
                     HStack(alignment: .top, spacing: 0) {
                         ForEach(days, id: \.self) { day in
                             DayColumnView(
-                                store: treeStore,
+                                store: store,
                                 day: day,
-                                tasks: treeStore.tasks(on: DateISO.dayString(from: day)),
+                                tasks: store.tasks(on: DateISO.dayString(from: day)),
                                 pixelsPerHour: pixelsPerHour,
                                 columnWidth: columnWidth,
                                 selectedTaskID: $selectedTaskID,
@@ -193,55 +189,14 @@ struct DayCalendarView: View {
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
 
-                    // Tap + capsule pan on the hour scroller (`605f886` pan-only
-                    // ate SpatialTap, so empty-hour create went all-day).
-                    HourDurationPanBridge(
-                        enabled: homeChrome.drag == nil && !homeChrome.isResizing,
-                        liveColumns: {
-                            CalendarLayout.hourCanvasColumns(
-                                dayISOs: dayISOs,
-                                tasksOnDay: { treeStore.tasks(on: $0) },
-                                pixelsPerHour: pixels,
-                                previewTaskID: homeChrome.durationResize?.taskID,
-                                previewDuration: homeChrome.durationResize?.previewDuration
-                            )
-                        },
-                        headerHeight: headerHeight,
-                        columnWidth: columnWidth,
-                        pixelsPerHour: pixelsPerHour,
-                        snap: homeChrome.snapInterval,
-                        onTimedCreate: { dayISO, minutes in
-                            guard homeChrome.durationResize == nil, homeChrome.drag == nil else { return }
-                            composerText = ""
-                            calendarComposer = .timed(dayISO: dayISO, minutes: minutes)
-                        },
-                        onOpenDetails: { taskID in
-                            guard homeChrome.durationResize == nil, homeChrome.drag == nil else { return }
-                            selectedTaskID = taskID
-                        },
-                        onBegan: { hit in
-                            homeChrome.beginDurationResize(taskID: hit.taskID, duration: hit.duration)
-                        },
-                        onChanged: { homeChrome.moveDurationResize(deltaY: $0) },
-                        onEnded: {
-                            if let result = homeChrome.finishDurationResize() {
-                                treeStore.setDuration(result.taskID, minutes: result.duration)
-                            }
-                        },
-                        onCancel: { homeChrome.cancelDurationResize() }
-                    )
-                    .frame(width: 1, height: 1)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-
-                    ScrollOffsetLockBridge(locked: homeChrome.durationResize != nil)
+                    ScrollOffsetLockBridge(locked: chrome.durationResize != nil)
                         .frame(width: 1, height: 1)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
             }
             .frame(height: timedHeight)
-            .scrollDisabled(homeChrome.pointerCaptured)
+            .scrollDisabled(chrome.pointerCaptured)
             .modifier(ScrollOffsetTracker { hourScrollY = $0.y })
             .onAppear { jumpHours(vProxy) }
             .onChange(of: nowScrollGeneration) { _, _ in jumpHours(vProxy) }
