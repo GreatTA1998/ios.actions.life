@@ -780,6 +780,29 @@ final class CalendarLayoutTests: XCTestCase {
 
         XCTAssertEqual(hit(288), .blockBody(taskID: "pr3"))
         XCTAssertEqual(hit(310), .capsule(taskID: "pr3"))
+        // `e728c7b` a11y `calendar.timed.*` `(50, 315.3, 168, 39.3)` —
+        // center tap must stay Details, not the duration pan.
+        let e728 = UIView(frame: CGRect(x: 50, y: 315.3, width: 168, height: 39.3))
+        e728.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        scroll.addSubview(e728)
+        XCTAssertEqual(
+            CalendarLayout.paintedCardHit(
+                from: e728,
+                locationInScroll: CGPoint(x: 134, y: 315.3 + 19.65),
+                in: scroll
+            ),
+            .blockBody(taskID: "pr3"),
+            "card-body a11y tap must open Details"
+        )
+        XCTAssertEqual(
+            CalendarLayout.paintedCardHit(
+                from: e728,
+                locationInScroll: CGPoint(x: 134, y: 346.7),
+                in: scroll
+            ),
+            .capsule(taskID: "pr3"),
+            "bottom 16pt stays duration"
+        )
         XCTAssertEqual(hit(303.6), .capsule(taskID: "pr3"))
         XCTAssertEqual(hit(319.0), .capsule(taskID: "pr3"))
 

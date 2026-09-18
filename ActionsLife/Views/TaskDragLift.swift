@@ -588,8 +588,9 @@ struct HourDurationPanBridge: UIViewRepresentable {
         fileprivate var capturedTaskID: String?
         private var capturedStartDuration: Double = 30
         private var beganWindowY: CGFloat?
-        /// Hour scroller — pan may live on the window so the same `UITouch`
-        /// is followed after it leaves the 16pt capsule (`81ba98a` 35 min).
+        /// Hour scroller the pan is installed on (`81ba98a` Details). Follow
+        /// the capsule `UITouch` in window space after `.began` — do **not**
+        /// put the pan on the window (`e728c7b` ate `calendar.timed.*` taps).
         fileprivate weak var hourScroll: UIScrollView?
         /// The capsule `UITouch` from `.began`. Sampled in window space
         /// until `.ended` / `.cancelled`, even +80 pt below the 39pt card.
@@ -725,18 +726,6 @@ struct HourDurationPanBridge: UIViewRepresentable {
             writeStoreDuration(locationY: windowY, ended: ended)
         }
 
-        /// Window-level pan sees every window touch. Only the hour scroller
-        /// may start a session — Details / list / all-day stay untouched.
-        /// Do not use `scroll.bounds.contains` — `bounds.origin` is the
-        /// content offset, so a scrolled hour grid (6–9) would reject the
-        /// capsule and duration would never start.
-        func hourScrollContains(_ touch: UITouch, scroll: UIScrollView) -> Bool {
-            guard let window = touch.window ?? scroll.window else { return true }
-            let windowPoint = touch.location(in: window)
-            guard let hit = window.hitTest(windowPoint, with: nil) else { return true }
-            return hit === scroll || hit.isDescendant(of: scroll)
-        }
-
         func beginFollowing(_ touch: UITouch) {
             trackedTouch = touch
             guard followLink == nil else { return }
@@ -772,16 +761,16 @@ struct HourDurationPanBridge: UIViewRepresentable {
         /// Direct store write from `touchesMoved` / `touchesEnded`.
         func writeStoreDuration(locationY: CGFloat, ended: Bool) {
             guard let taskID = capturedTaskID, !taskID.isEmpty else { return }
-            guard writeDuration != nil || commitDuration != nil else { return }
+            let liveWrite = writeDuration ?? parent.onChanged
+            let liveCommit = commitDuration ?? parent.onEnded
             dragging = true
             restoreLockedOffsets()
             let live = minutesFromBegan(locationY: locationY)
             if ended {
                 let snapped = CalendarLayout.snapDuration(live, snap: parent.snap)
-                let commit = commitDuration ?? writeDuration
-                invokeStoreWrite(commit, taskID: taskID, minutes: snapped)
+                invokeStoreWrite(liveCommit, taskID: taskID, minutes: snapped)
             } else {
-                invokeStoreWrite(writeDuration, taskID: taskID, minutes: live)
+                invokeStoreWrite(liveWrite, taskID: taskID, minutes: live)
             }
         }
 
@@ -843,34 +832,34 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            if dragging || capturedTaskID != nil { return gestureRecognizer === pan }
-            guard parent.enabled else { return false }
+            guard parent.enabled || dragging else { return false }
             let scroll = hourScroll ?? gestureRecognizer.view as? UIScrollView
             guard let scroll else { return false }
-            // Pan may be on the window — do not claim list / all-day / Details
-            // taps that never landed in the hour scroller.
-            if gestureRecognizer === pan, !hourScrollContains(touch, scroll: scroll) {
-                return false
-            }
             let hit = canvasHit(in: scroll, locationInScroll: touch.location(in: scroll))
+            // Card body `calendar.timed.*` must reach Details (`e728c7b`
+            // window pan + capturedTaskID stole the tap). Never deny the
+            // tap because a capsule id is pending.
+            if gestureRecognizer === tap {
+                if dragging { return false }
+                switch hit {
+                case .emptyHour, .blockBody:
+                    return true
+                default:
+                    return false
+                }
+            }
             if gestureRecognizer === pan {
+                if dragging { return true }
                 if case .capsule(let target) = hit {
                     pendingHit = target
                     claimedTarget = target
-                    capturedTaskID = target.taskID
-                    capturedStartDuration = target.duration
                     return true
                 }
                 pendingHit = nil
                 claimedTarget = nil
                 return false
             }
-            switch hit {
-            case .emptyHour, .blockBody:
-                return true
-            default:
-                return false
-            }
+            return false
         }
 
         func gestureRecognizer(
@@ -1011,11 +1000,11 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         override func canPrevent(_ other: UIGestureRecognizer) -> Bool {
-            owner?.dragging == true || owner?.capturedTaskID != nil
+            owner?.dragging == true
         }
 
         override func canBePrevented(by other: UIGestureRecognizer) -> Bool {
-            owner?.dragging != true && owner?.capturedTaskID == nil
+            owner?.dragging != true
         }
 
         override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {
@@ -1068,13 +1057,13 @@ struct HourDurationPanBridge: UIViewRepresentable {
             let pan = coordinator.pan
             let tap = coordinator.tap
             coordinator.hourScroll = scroll
-            // Window so the same UITouch is followed after it leaves the
-            // 16pt capsule. Tap stays on the hour scroller (Details / create).
-            let host: UIView = scroll.window ?? scroll
-            if installedOn !== scroll || pan.view !== host {
+            // Pan + tap on the hour scroller (`81ba98a` Details). Follow the
+            // capsule UITouch in window space after `.began` — do not attach
+            // the pan to the window (`e728c7b` ate `calendar.timed.*` taps).
+            if installedOn !== scroll || pan.view !== scroll {
                 pan.view?.removeGestureRecognizer(pan)
                 tap.view?.removeGestureRecognizer(tap)
-                host.addGestureRecognizer(pan)
+                scroll.addGestureRecognizer(pan)
                 scroll.addGestureRecognizer(tap)
                 installedOn = scroll
             }
