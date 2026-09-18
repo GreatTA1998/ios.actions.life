@@ -36,15 +36,12 @@ struct InboxView: View {
             .padding(.top, 8)
             .padding(.bottom, 28)
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .background {
-                ScrollEdgeBridge(
-                    delta: chrome.listScrollDelta,
-                    generation: chrome.edgeScrollGeneration
-                )
-                .allowsHitTesting(false)
-            }
         }
-        .scrollDisabled(chrome.pointerCaptured)
+        .scrollDisabled(chrome.isResizing)
+        .overlay {
+            ScrollEdgeBridge(chrome: chrome, pane: .list)
+                .allowsHitTesting(false)
+        }
         .overlay(alignment: .center) {
             if store.inbox.isEmpty, composer == nil {
                 Text("Tap a gap to add a task")

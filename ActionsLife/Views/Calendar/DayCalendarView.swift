@@ -25,6 +25,10 @@ struct DayCalendarView: View {
             topChrome
         }
         .background(Theme.calendarBackground)
+        .overlay {
+            ScrollEdgeBridge(chrome: chrome, pane: .calendar)
+                .allowsHitTesting(false)
+        }
     }
 
     private var calendarScroll: some View {
@@ -44,15 +48,8 @@ struct DayCalendarView: View {
                         .id(DateISO.dayString(from: day))
                     }
                 }
-                .background {
-                    ScrollEdgeBridge(
-                        delta: chrome.calendarScrollDelta,
-                        generation: chrome.edgeScrollGeneration
-                    )
-                    .allowsHitTesting(false)
-                }
             }
-            .scrollDisabled(chrome.pointerCaptured)
+            .scrollDisabled(chrome.isResizing)
             .scrollPosition(id: $scrolledDayID)
             .modifier(ScrollOffsetTracker(offset: $scrollOffset))
             .onAppear {

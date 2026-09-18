@@ -137,19 +137,27 @@ final class HomeChrome {
     }
 
     func updateEdgeScroll(finger: CGPoint) {
+        let ghost = drag.map {
+            CGPoint(x: $0.finger.x - $0.grabOffset.width, y: $0.finger.y - $0.grabOffset.height)
+        }
+        let ghostSize = drag?.ghostSize ?? .zero
         calendarScrollDelta = DropMath.edgeScrollDelta(
             finger: finger,
             viewport: calendarPane,
             band: Self.edgeBand,
             step: Self.edgeStep,
-            axes: [.horizontal, .vertical]
+            axes: [.horizontal, .vertical],
+            ghostTop: ghost,
+            ghostSize: ghostSize
         )
         listScrollDelta = DropMath.edgeScrollDelta(
             finger: finger,
             viewport: listPane,
             band: Self.edgeBand,
             step: Self.edgeStep,
-            axes: [.vertical]
+            axes: [.vertical],
+            ghostTop: ghost,
+            ghostSize: ghostSize
         )
         if calendarScrollDelta != .zero || listScrollDelta != .zero {
             edgeScrollGeneration &+= 1
@@ -237,27 +245,48 @@ enum DropMath {
 
     /// Expo `edgeScrollDelta`.
     ///
-    /// `CGRect.contains` is max-edge exclusive, and XCUITest / a thumb on the
-    /// home indicator often sits on or just past `maxY`. Inflate so a hold on
-    /// the list bottom still autoscrolls instead of hitting a drop slot.
+    /// A lift held at the list bottom often has the **finger** on/past `maxY`
+    /// (home indicator, XCUITest y=0.94) while the **ghost** sits a row above.
+    /// Treat finger or ghost in the band, and finger just outside the pane, as
+    /// an edge — `CGRect.contains` is max-edge exclusive.
     static func edgeScrollDelta(
         finger: CGPoint,
         viewport: CGRect,
         band: CGFloat,
         step: CGFloat,
-        axes: AxisSet
+        axes: AxisSet,
+        ghostTop: CGPoint? = nil,
+        ghostSize: CGSize = .zero
     ) -> CGSize {
         guard !viewport.isNull, !viewport.isEmpty else { return .zero }
-        guard viewport.insetBy(dx: -8, dy: -8).contains(finger) else { return .zero }
+        let ghostRect: CGRect? = ghostTop.map {
+            CGRect(
+                origin: $0,
+                size: ghostSize.width > 1 ? ghostSize : CGSize(width: 8, height: 36)
+            )
+        }
+        let xAligned = finger.x >= viewport.minX - 24 && finger.x <= viewport.maxX + 24
+        let yAligned = finger.y >= viewport.minY - 24 && finger.y <= viewport.maxY + 24
+        let fingerNearPane = viewport.insetBy(dx: -24, dy: -40).contains(finger)
+            || (xAligned && (finger.y < viewport.minY || finger.y > viewport.maxY))
+            || (yAligned && (finger.x < viewport.minX || finger.x > viewport.maxX))
+        let ghostNearPane = ghostRect?.intersects(viewport.insetBy(dx: -8, dy: -8)) ?? false
+        guard fingerNearPane || ghostNearPane else { return .zero }
+
         var dx: CGFloat = 0
         var dy: CGFloat = 0
         if axes.contains(.vertical) {
-            if finger.y < viewport.minY + band { dy = -step }
-            else if finger.y > viewport.maxY - band { dy = step }
+            let ghostMinY = ghostRect?.minY ?? .greatestFiniteMagnitude
+            let ghostMaxY = ghostRect?.maxY ?? -.greatestFiniteMagnitude
+            if finger.y < viewport.minY + band || finger.y < viewport.minY || ghostMinY < viewport.minY + band {
+                dy = -step
+            } else if finger.y > viewport.maxY - band || finger.y > viewport.maxY || ghostMaxY > viewport.maxY - band {
+                dy = step
+            }
         }
         if axes.contains(.horizontal) {
-            if finger.x < viewport.minX + band { dx = -step }
-            else if finger.x > viewport.maxX - band { dx = step }
+            if finger.x < viewport.minX + band || finger.x < viewport.minX { dx = -step }
+            else if finger.x > viewport.maxX - band || finger.x > viewport.maxX { dx = step }
         }
         return CGSize(width: dx, height: dy)
     }
@@ -283,7 +312,9 @@ enum DropMath {
             viewport: listPane,
             band: HomeChrome.edgeBand,
             step: 1,
-            axes: [.vertical]
+            axes: [.vertical],
+            ghostTop: ghostTop,
+            ghostSize: ghostSize
         ) != .zero
 
         var nest: HomeChrome.DropZone?

@@ -187,6 +187,42 @@ final class DragDropTests: XCTestCase {
             axes: [.vertical]
         )
         XCTAssertEqual(onMaxEdge.height, 16)
+        let belowPane = DropMath.edgeScrollDelta(
+            finger: CGPoint(x: 150, y: 540),
+            viewport: viewport,
+            band: 44,
+            step: 16,
+            axes: [.vertical]
+        )
+        XCTAssertEqual(belowPane.height, 16)
+        let abovePane = DropMath.edgeScrollDelta(
+            finger: CGPoint(x: 150, y: 80),
+            viewport: viewport,
+            band: 44,
+            step: 16,
+            axes: [.vertical]
+        )
+        XCTAssertEqual(abovePane.height, -16)
+        let ghostAtBottom = DropMath.edgeScrollDelta(
+            finger: CGPoint(x: 150, y: 430),
+            viewport: viewport,
+            band: 44,
+            step: 16,
+            axes: [.vertical],
+            ghostTop: CGPoint(x: 40, y: 470),
+            ghostSize: CGSize(width: 200, height: 40)
+        )
+        XCTAssertEqual(ghostAtBottom.height, 16)
+        let midList = DropMath.edgeScrollDelta(
+            finger: CGPoint(x: 150, y: 300),
+            viewport: viewport,
+            band: 44,
+            step: 16,
+            axes: [.vertical],
+            ghostTop: CGPoint(x: 40, y: 280),
+            ghostSize: CGSize(width: 200, height: 40)
+        )
+        XCTAssertEqual(midList, .zero)
         let outside = DropMath.edgeScrollDelta(
             finger: CGPoint(x: 400, y: 110),
             viewport: viewport,
