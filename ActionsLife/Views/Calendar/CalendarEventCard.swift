@@ -94,14 +94,15 @@ struct CalendarEventCard: View {
         .overlay(alignment: .bottom) {
             if !compact {
                 DurationEdgeHandle(task: task, onResize: onResizeDuration)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: HomeChrome.durationCapsuleHit)
             }
         }
     }
 }
 
-/// Visible 28pt capsule on the card. The pan is installed on the hour
-/// UIScrollView and gated by this view's **window** frame — not a UIView
-/// whose layout slot lags `.position` / `.offset` / SwiftUI hosting.
+/// Painted capsule on the card. Pan is on the hour scroller, gated by this
+/// bar's window frame (bottom 16pt). Card-body taps still open Details.
 struct DurationEdgeHandle: View {
     let task: TaskSnapshot
     var onResize: (Double) -> Void
@@ -111,7 +112,7 @@ struct DurationEdgeHandle: View {
     var body: some View {
         Color.primary.opacity(0.001)
             .frame(maxWidth: .infinity)
-            .frame(height: HomeChrome.durationHandleHit)
+            .frame(height: HomeChrome.durationCapsuleHit)
             .background {
                 GeometryReader { geo in
                     Color.clear

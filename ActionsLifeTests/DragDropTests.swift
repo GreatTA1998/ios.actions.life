@@ -212,23 +212,25 @@ final class DragDropTests: XCTestCase {
     }
 
     func testDurationPanHitsVisibleCapsuleInWindowCoordinates() {
-        // Finger at the painted capsule, not the pre-position UIView slot.
-        let capsule = CGRect(x: 60, y: 390, width: 180, height: 28)
+        // 16pt capsule at the bottom of a 36pt card; the title/body stays tappable.
+        let card = CGRect(x: 60, y: 300, width: 180, height: 36)
+        let capsule = CGRect(x: card.minX, y: card.maxY - 16, width: card.width, height: 16)
+        XCTAssertFalse(
+            CalendarLayout.touchHitsCapsule(
+                windowPoint: CGPoint(x: 150, y: card.midY),
+                capsuleGlobal: capsule
+            ),
+            "card body must not be the duration pan"
+        )
         XCTAssertTrue(
             CalendarLayout.touchHitsCapsule(
-                windowPoint: CGPoint(x: 150, y: 404),
+                windowPoint: CGPoint(x: 150, y: capsule.midY),
                 capsuleGlobal: capsule
             )
         )
         XCTAssertFalse(
             CalendarLayout.touchHitsCapsule(
-                windowPoint: CGPoint(x: 150, y: 300),
-                capsuleGlobal: capsule
-            )
-        )
-        XCTAssertFalse(
-            CalendarLayout.touchHitsCapsule(
-                windowPoint: CGPoint(x: 150, y: 404),
+                windowPoint: CGPoint(x: 150, y: capsule.midY),
                 capsuleGlobal: .null
             )
         )

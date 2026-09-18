@@ -15,8 +15,10 @@ final class HomeChrome {
     static let edgeStep: CGFloat = 16
     static let splitHandle: CGFloat = 36
     static let splitMinPane: CGFloat = 48
-    /// Bottom edge of a timed block reserved for duration resize (lift ignores this band).
+    /// Bottom edge reserved so a lift does not start on the duration capsule.
     static let durationHandleHit: CGFloat = 28
+    /// Tight pan target on the painted capsule so a 36pt card's title still opens Details.
+    static let durationCapsuleHit: CGFloat = 16
 
     var isResizing = false
     var isLifting = false

@@ -487,7 +487,9 @@ struct DurationResizeBridge: UIViewRepresentable {
 
     func updateUIView(_ uiView: InstallerView, context: Context) {
         context.coordinator.parent = self
-        context.coordinator.pan.isEnabled = enabled
+        if !context.coordinator.dragging {
+            context.coordinator.pan.isEnabled = enabled
+        }
         uiView.coordinator = context.coordinator
         uiView.ensureInstalled()
     }
@@ -495,8 +497,7 @@ struct DurationResizeBridge: UIViewRepresentable {
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: DurationResizeBridge
         let pan = DurationPanRecognizer()
-        private var dragging = false
-        private var startY: CGFloat = 0
+        private(set) var dragging = false
         private var frozen: [UIScrollView] = []
 
         init(parent: DurationResizeBridge) {
@@ -504,7 +505,7 @@ struct DurationResizeBridge: UIViewRepresentable {
             super.init()
             pan.addTarget(self, action: #selector(handlePan(_:)))
             pan.delegate = self
-            pan.cancelsTouchesInView = true
+            pan.cancelsTouchesInView = false
             pan.maximumNumberOfTouches = 1
         }
 
@@ -514,20 +515,20 @@ struct DurationResizeBridge: UIViewRepresentable {
         }
 
         @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
-            let y = gesture.location(in: nil).y
+            let deltaY = gesture.translation(in: nil).y
             switch gesture.state {
             case .began:
                 dragging = true
-                startY = y
                 freezeScrollers(from: gesture.view)
                 parent.onBegan()
-                parent.onChanged(0)
+                parent.onChanged(deltaY)
             case .changed:
                 guard dragging else { return }
-                parent.onChanged(y - startY)
+                parent.onChanged(deltaY)
             case .ended:
                 guard dragging else { return }
                 dragging = false
+                parent.onChanged(deltaY)
                 unfreezeScrollers()
                 parent.onEnded()
             case .cancelled, .failed:
@@ -544,7 +545,9 @@ struct DurationResizeBridge: UIViewRepresentable {
         }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            parent.enabled
+            guard parent.enabled else { return false }
+            let translation = pan.translation(in: nil)
+            return abs(translation.y) >= abs(translation.x)
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
@@ -592,11 +595,11 @@ struct DurationResizeBridge: UIViewRepresentable {
 
     final class DurationPanRecognizer: UIPanGestureRecognizer {
         override func canPrevent(_ other: UIGestureRecognizer) -> Bool {
-            true
+            state == .began || state == .changed
         }
 
         override func canBePrevented(by other: UIGestureRecognizer) -> Bool {
-            false
+            !(state == .began || state == .changed)
         }
 
         override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {
@@ -649,6 +652,7 @@ struct DurationResizeBridge: UIViewRepresentable {
             if installedOn === scroll, pan.view === scroll { return }
             pan.view?.removeGestureRecognizer(pan)
             scroll.addGestureRecognizer(pan)
+            scroll.panGestureRecognizer.require(toFail: pan)
             installedOn = scroll
             isUserInteractionEnabled = false
         }

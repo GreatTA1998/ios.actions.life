@@ -92,20 +92,26 @@ enum CalendarLayout {
         return hittable.contains(location)
     }
 
-    /// Window-space hit for the visible duration capsule (GeometryReader global
-    /// frame). Do not use a UIView's `convert(bounds:)` — `.position` / `.offset`
-    /// leave that UIView behind the finger.
+    /// Window-space hit for the painted duration capsule only — not the card
+    /// title. A 36pt block's body tap must still open Details.
     static func touchHitsCapsule(
         windowPoint: CGPoint,
         capsuleGlobal: CGRect,
         slopX: CGFloat = 6,
-        slopY: CGFloat = 10
+        slopY: CGFloat = 4
     ) -> Bool {
         guard !capsuleGlobal.isNull, !capsuleGlobal.isInfinite,
               capsuleGlobal.width > 1, capsuleGlobal.height > 1 else {
             return false
         }
-        return capsuleGlobal.insetBy(dx: -slopX, dy: -slopY).contains(windowPoint)
+        let band = min(16, capsuleGlobal.height)
+        let tight = CGRect(
+            x: capsuleGlobal.minX,
+            y: capsuleGlobal.maxY - band,
+            width: capsuleGlobal.width,
+            height: band
+        )
+        return tight.insetBy(dx: -slopX, dy: -slopY).contains(windowPoint)
     }
 
     static func scrollTargetHour(now: Date = .now, calendar: Calendar = .current) -> Int {
