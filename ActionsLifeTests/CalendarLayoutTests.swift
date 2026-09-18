@@ -1023,6 +1023,34 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(lastMinutes, minutes, accuracy: 0.01)
     }
 
+    func testXcuiHandleWindowDeltaIsEightyNotLocationInNil() {
+        // `9cd088e`: `location(in: nil)` stays 0. XCUI handle Other
+        // `(134.0, 320.0)` → `400.0` is +80 pt in the same window.
+        let nilSpace: UIView? = nil
+        XCTAssertNil(nilSpace, "do not call location(in: nil)")
+        let beganWindowY: CGFloat = 320
+        let fingerWindowY: CGFloat = 400
+        let deltaY = fingerWindowY - beganWindowY
+        XCTAssertEqual(deltaY, 80, accuracy: 0.01)
+        let minutes = CalendarLayout.paintedHandleMinutes(
+            start: 30,
+            windowDeltaY: deltaY,
+            pixelsPerHour: 50
+        )
+        XCTAssertEqual(minutes, 30 + 80 / 50 * 60, accuracy: 0.01)
+        XCTAssertGreaterThan(minutes, 30)
+        XCTAssertEqual(
+            CalendarLayout.paintedHandleMinutes(
+                start: 30,
+                windowDeltaY: 0,
+                pixelsPerHour: 50
+            ),
+            30,
+            accuracy: 0.01,
+            "location(in: nil) delta must not be the live write"
+        )
+    }
+
     func testPinnedScrollerTranslationZeroUsesWindowTouchDelta() {
         // `953443c`: claim pins `contentOffset`, so pan translation / offset
         // delta is ~0. Finger window Y 325 → 405 must still write
