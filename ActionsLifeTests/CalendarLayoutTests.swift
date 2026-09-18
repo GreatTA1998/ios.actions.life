@@ -967,6 +967,49 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(after.height, CGFloat(minutes / 60) * hourH, accuracy: 0.01)
     }
 
+    func testLiveRecognizerFollowCallsSetDurationForPaintedTaskID() {
+        // `82619a9` `testEightyPointHandleFollowGrowsPaintedBlockFrame` is
+        // layout math. The XCUI +80 pt handle drag must go through
+        // `DurationPanRecognizer` → `TaskTreeStore.setDuration` for the
+        // painted card id, using painted hourHeight.
+        var storeWrites: [(String, Double)] = []
+        let pixels = 50.0
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { [] },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: pixels,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { _, _ in
+                XCTFail("live store write must not fall back to onChanged")
+            },
+            onEnded: { _, _ in },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        coordinator.bindStoreWrites(from: bridge)
+        coordinator.installLiveSetDuration { id, minutes in
+            storeWrites.append((id, minutes))
+        }
+        XCTAssertTrue(coordinator.hasLiveStoreSetDuration())
+        coordinator.startWindowFollow(taskID: "pr3", startDuration: 30, beganWindowY: 305)
+        coordinator.pan.performLiveWindowFollow(windowY: 305 + 80, ended: false)
+        XCTAssertEqual(storeWrites.count, 1)
+        XCTAssertEqual(storeWrites[0].0, "pr3")
+        let minutes = CalendarLayout.paintedHandleMinutes(
+            start: 30,
+            windowDeltaY: 80,
+            pixelsPerHour: pixels
+        )
+        XCTAssertEqual(storeWrites[0].1, minutes, accuracy: 0.01)
+        XCTAssertGreaterThan(storeWrites[0].1, 30)
+        XCTAssertEqual(minutes, 30 + 80 / 50 * 60, accuracy: 0.01)
+    }
+
     func testTitleStaticTextIsDetailsNotDurationHandle() {
         // `b8f1337`: StaticText `calendar.timed.*` `(87.3, 312.7, 122.7, 18)`
         // must stay Details. Duration is only the 16pt handle below the title.

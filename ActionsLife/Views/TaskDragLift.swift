@@ -543,6 +543,8 @@ struct HourDurationPanBridge: UIViewRepresentable {
     var columnWidth: CGFloat
     var pixelsPerHour: Double
     var snap: Int
+    /// Live store — handle follow calls `setDuration` on this instance.
+    var treeStore: TaskTreeStore? = nil
     var onTimedCreate: (_ dayISO: String, _ minutes: Int) -> Void
     var onOpenDetails: (_ taskID: String) -> Void
     var onBegan: (CalendarLayout.DurationCapsuleTarget) -> Void
@@ -563,6 +565,14 @@ struct HourDurationPanBridge: UIViewRepresentable {
 
     func updateUIView(_ uiView: InstallerView, context: Context) {
         context.coordinator.parent = self
+        // Bind `TaskTreeStore.setDuration` on this MainActor view path so
+        // handle `touchesMoved` / display-link can call that method — the
+        // unit-test `followWindowY` hook is not the XCUI path (`82619a9`).
+        if let store = treeStore {
+            context.coordinator.installLiveSetDuration { id, minutes in
+                store.setDuration(id, minutes: minutes)
+            }
+        }
         context.coordinator.bindStoreWrites(from: self)
         if !context.coordinator.dragging {
             context.coordinator.pan.isEnabled = enabled
@@ -587,6 +597,10 @@ struct HourDurationPanBridge: UIViewRepresentable {
         var commitDuration: ((_ taskID: String, _ minutes: Double) -> Void)?
         fileprivate var capturedTaskID: String?
         private var capturedStartDuration: Double = 30
+        /// Live `TaskTreeStore` for handle follow writes (`82619a9`).
+        fileprivate weak var treeStore: TaskTreeStore?
+        /// `TaskTreeStore.setDuration` copied on the MainActor view path.
+        fileprivate var liveStoreSetDuration: ((_ taskID: String, _ minutes: Double) -> Void)?
         private var beganWindowY: CGFloat?
         /// Hour scroller the pan is installed on (`81ba98a` Details). Follow
         /// the capsule `UITouch` in window space after `.began` — do **not**
@@ -682,6 +696,13 @@ struct HourDurationPanBridge: UIViewRepresentable {
         func bindStoreWrites(from parent: HourDurationPanBridge) {
             writeDuration = parent.onChanged
             commitDuration = parent.onEnded
+            treeStore = parent.treeStore
+        }
+
+        /// MainActor `updateUIView` installs the real store method so XCUI
+        /// handle `touchesMoved` does not depend on a stale `onChanged`.
+        func installLiveSetDuration(_ write: @escaping (_ taskID: String, _ minutes: Double) -> Void) {
+            liveStoreSetDuration = write
         }
 
         func refreshStoreWrites() {
@@ -690,7 +711,11 @@ struct HourDurationPanBridge: UIViewRepresentable {
 
         /// Handle follow must have a live `setDuration` (`81d22bb` pin-only).
         func hasLiveSetDurationCallback() -> Bool {
-            writeDuration != nil
+            liveStoreSetDuration != nil || writeDuration != nil
+        }
+
+        func hasLiveStoreSetDuration() -> Bool {
+            liveStoreSetDuration != nil
         }
 
         /// minutes = start + (windowY − beganWindowY) / paintedHourHeight * 60.
@@ -741,6 +766,37 @@ struct HourDurationPanBridge: UIViewRepresentable {
             writeStoreDuration(locationY: windowY, ended: ended)
         }
 
+        /// Follow-only: bind the painted card `task.id` from the handle
+        /// `UITouch` so `touchesMoved` can `setDuration` after leaving 16pt.
+        func bindFollowFromTouch(_ touch: UITouch) {
+            trackedTouch = touch
+            if beganWindowY == nil {
+                beganWindowY = touch.location(in: touch.window ?? hourScroll).y
+            }
+            if followTaskID() != nil {
+                beginFollowing(touch)
+                return
+            }
+            guard let scroll = hourScroll else { return }
+            let location = touch.location(in: scroll)
+            let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: location)
+            if let painted = CalendarLayout.paintedCardHit(
+                from: view,
+                locationInScroll: location,
+                in: scroll
+            ), case .capsule(let taskID) = painted {
+                capturedTaskID = taskID
+                capturedStartDuration = capsuleTarget(taskID: taskID).duration
+                beginFollowing(touch)
+                return
+            }
+            if let hit = pendingHit ?? claimedTarget {
+                capturedTaskID = hit.taskID
+                capturedStartDuration = hit.duration
+                beginFollowing(touch)
+            }
+        }
+
         /// Id already claimed by the 16pt handle — write path only.
         func followTaskID() -> String? {
             if let id = capturedTaskID, !id.isEmpty { return id }
@@ -778,23 +834,50 @@ struct HourDurationPanBridge: UIViewRepresentable {
         /// Keep writing window Y if `touchesMoved` is skipped after the
         /// finger leaves the 16pt handle. Same `UITouch`, window space.
         @objc func sampleTrackedTouch() {
-            guard let touch = trackedTouch, followTaskID() != nil else { return }
-            let y = touch.location(in: touch.window).y
-            switch touch.phase {
-            case .began, .moved, .stationary:
-                writeStoreDuration(locationY: y, ended: false)
-                restoreLockedOffsets()
-            case .ended, .cancelled:
+            guard followTaskID() != nil, let y = currentFollowWindowY() else { return }
+            if let touch = trackedTouch, touch.phase == .ended {
                 writeStoreDuration(locationY: y, ended: true)
                 clearCapsuleCapture()
                 dropClaim()
-            default:
-                break
+                return
             }
+            // `.cancelled` is the handle-edge / recognizer death — the
+            // XCUI finger is still down +80 pt below the card. Do not
+            // commit or `dropClaim()` here (`28ee931` froze at 35 min).
+            writeStoreDuration(locationY: y, ended: false)
+            restoreLockedOffsets()
         }
 
-        /// Live `setDuration` from handle `touchesMoved` / display-link only.
-        /// Does not change claim / `shouldReceive` / install.
+        /// Window Y from the handle `UITouch`, then the hour scroller pan
+        /// after the recognizer dies at the 16pt band.
+        func currentFollowWindowY() -> CGFloat? {
+            if let touch = trackedTouch {
+                let space: UIView? = touch.window ?? hourScroll?.window ?? hourScroll
+                switch touch.phase {
+                case .began, .moved, .stationary, .ended:
+                    return touch.location(in: space).y
+                default:
+                    break
+                }
+            }
+            if let scroll = hourScroll {
+                let pan = scroll.panGestureRecognizer
+                switch pan.state {
+                case .began, .changed:
+                    return pan.location(in: scroll.window ?? scroll).y
+                default:
+                    break
+                }
+            }
+            if let touch = trackedTouch {
+                let space: UIView? = touch.window ?? hourScroll?.window ?? hourScroll
+                return touch.location(in: space).y
+            }
+            return nil
+        }
+
+        /// Live `TaskTreeStore.setDuration` from handle `touchesMoved` /
+        /// display-link only. Does not change claim / `shouldReceive` / install.
         func writeStoreDuration(locationY: CGFloat, ended: Bool) {
             refreshStoreWrites()
             guard let taskID = followTaskID(), !taskID.isEmpty else { return }
@@ -802,15 +885,16 @@ struct HourDurationPanBridge: UIViewRepresentable {
             dragging = true
             restoreLockedOffsets()
             let live = minutesFromBegan(locationY: locationY)
-            // Always the live store closures — do not depend on a nil copy.
-            if ended {
-                invokeStoreWrite(
-                    parent.onEnded,
-                    taskID: taskID,
-                    minutes: CalendarLayout.snapDuration(live, snap: parent.snap)
-                )
-            } else {
-                invokeStoreWrite(parent.onChanged, taskID: taskID, minutes: live)
+            let minutes = ended
+                ? CalendarLayout.snapDuration(live, snap: parent.snap)
+                : live
+            // XCUI +80 pt handle drag must hit `TaskTreeStore.setDuration`
+            // for this painted card id — not only the layout unit test.
+            let storeWrite = liveStoreSetDuration
+                ?? (ended ? commitDuration ?? parent.onEnded : writeDuration ?? parent.onChanged)
+            invokeStoreWrite(storeWrite, taskID: taskID, minutes: minutes)
+            if ended, liveStoreSetDuration != nil {
+                invokeStoreWrite(parent.onEnded, taskID: taskID, minutes: minutes)
             }
         }
 
@@ -999,11 +1083,28 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 ?? touches.first
             guard let touch else { return }
             owner?.restoreLockedOffsets()
-            if state == .began || state == .changed {
-                state = .changed
-            }
-            owner?.followWindowY(windowY(of: touch), ended: false)
+            deliverLiveFollow(from: touch, ended: false)
             owner?.restoreLockedOffsets()
+        }
+
+        /// Same method `touchesMoved` uses after the finger leaves 16pt.
+        /// Calls `TaskTreeStore.setDuration` via the MainActor-bound write.
+        func deliverLiveFollow(from touch: UITouch, ended: Bool) {
+            owner?.bindFollowFromTouch(touch)
+            if owner?.followTaskID() != nil {
+                if state == .possible {
+                    state = .began
+                }
+                if !ended, state == .began || state == .changed {
+                    state = .changed
+                }
+            }
+            owner?.followWindowY(windowY(of: touch), ended: ended)
+        }
+
+        /// XCUI / unit hook for the recognizer follow path (not layout math).
+        func performLiveWindowFollow(windowY: CGFloat, ended: Bool) {
+            owner?.followWindowY(windowY, ended: ended)
         }
 
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {

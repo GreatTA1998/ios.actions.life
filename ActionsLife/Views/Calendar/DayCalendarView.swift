@@ -210,6 +210,7 @@ struct DayCalendarView: View {
                         columnWidth: columnWidth,
                         pixelsPerHour: pixelsPerHour,
                         snap: homeChrome.snapInterval,
+                        treeStore: treeStore,
                         onTimedCreate: { dayISO, minutes in
                             guard homeChrome.durationResize == nil, homeChrome.drag == nil else { return }
                             composerText = ""
