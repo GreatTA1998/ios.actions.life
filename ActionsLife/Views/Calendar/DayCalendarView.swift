@@ -20,7 +20,6 @@ struct DayCalendarView: View {
     @State private var futureCount = 21
     @State private var nowScrollGeneration = 0
     @State private var headerHeight: CGFloat = 52
-    @State private var paintedCards: [CalendarLayout.PaintedTimedCard] = []
 
     private var pixelsPerHour: Double { store.profile?.pixelsPerHour ?? 50 }
     private var hourHeight: CGFloat { CalendarLayout.hourHeight(pixelsPerHour: pixelsPerHour) }
@@ -39,7 +38,6 @@ struct DayCalendarView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.calendarBackground)
         .onPreferenceChange(CalendarHeaderHeightKey.self) { headerHeight = max($0, 44) }
-        .onPreferenceChange(PaintedTimedCardKey.self) { paintedCards = $0 }
     }
 
     private var chromeRow: some View {
@@ -145,15 +143,19 @@ struct DayCalendarView: View {
     }
 
     private func hourScroll(timedHeight: CGFloat) -> some View {
-        ScrollViewReader { vProxy in
+        let treeStore = store
+        let homeChrome = chrome
+        let dayISOs = days.map { DateISO.dayString(from: $0) }
+        let pixels = pixelsPerHour
+        return ScrollViewReader { vProxy in
             ScrollView(.vertical, showsIndicators: false) {
                 ZStack(alignment: .topLeading) {
                     HStack(alignment: .top, spacing: 0) {
                         ForEach(days, id: \.self) { day in
                             DayColumnView(
-                                store: store,
+                                store: treeStore,
                                 day: day,
-                                tasks: store.tasks(on: DateISO.dayString(from: day)),
+                                tasks: treeStore.tasks(on: DateISO.dayString(from: day)),
                                 pixelsPerHour: pixelsPerHour,
                                 columnWidth: columnWidth,
                                 selectedTaskID: $selectedTaskID,
@@ -166,8 +168,6 @@ struct DayCalendarView: View {
                             )
                         }
                     }
-                    .coordinateSpace(name: "hourCanvas")
-
                     // Leading edge of the hour canvas — never at todayIndex×columnWidth.
                     VStack(spacing: 0) {
                         Color.clear.frame(height: CalendarLayout.nowScrollY(pixelsPerHour: pixelsPerHour))
@@ -196,44 +196,52 @@ struct DayCalendarView: View {
                     // Tap + capsule pan on the hour scroller (`605f886` pan-only
                     // ate SpatialTap, so empty-hour create went all-day).
                     HourDurationPanBridge(
-                        enabled: chrome.drag == nil && !chrome.isResizing,
-                        columns: hourCanvasColumns,
-                        paintedCards: paintedCards,
+                        enabled: homeChrome.drag == nil && !homeChrome.isResizing,
+                        liveColumns: {
+                            CalendarLayout.hourCanvasColumns(
+                                dayISOs: dayISOs,
+                                tasksOnDay: { treeStore.tasks(on: $0) },
+                                pixelsPerHour: pixels,
+                                previewTaskID: homeChrome.durationResize?.taskID,
+                                previewDuration: homeChrome.durationResize?.previewDuration
+                            )
+                        },
+                        headerHeight: headerHeight,
                         columnWidth: columnWidth,
                         pixelsPerHour: pixelsPerHour,
-                        snap: chrome.snapInterval,
+                        snap: homeChrome.snapInterval,
                         onTimedCreate: { dayISO, minutes in
-                            guard chrome.durationResize == nil, chrome.drag == nil else { return }
+                            guard homeChrome.durationResize == nil, homeChrome.drag == nil else { return }
                             composerText = ""
                             calendarComposer = .timed(dayISO: dayISO, minutes: minutes)
                         },
                         onOpenDetails: { taskID in
-                            guard chrome.durationResize == nil, chrome.drag == nil else { return }
+                            guard homeChrome.durationResize == nil, homeChrome.drag == nil else { return }
                             selectedTaskID = taskID
                         },
                         onBegan: { hit in
-                            chrome.beginDurationResize(taskID: hit.taskID, duration: hit.duration)
+                            homeChrome.beginDurationResize(taskID: hit.taskID, duration: hit.duration)
                         },
-                        onChanged: { chrome.moveDurationResize(deltaY: $0) },
+                        onChanged: { homeChrome.moveDurationResize(deltaY: $0) },
                         onEnded: {
-                            if let result = chrome.finishDurationResize() {
-                                store.setDuration(result.taskID, minutes: result.duration)
+                            if let result = homeChrome.finishDurationResize() {
+                                treeStore.setDuration(result.taskID, minutes: result.duration)
                             }
                         },
-                        onCancel: { chrome.cancelDurationResize() }
+                        onCancel: { homeChrome.cancelDurationResize() }
                     )
                     .frame(width: 1, height: 1)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
 
-                    ScrollOffsetLockBridge(locked: chrome.durationResize != nil)
+                    ScrollOffsetLockBridge(locked: homeChrome.durationResize != nil)
                         .frame(width: 1, height: 1)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
             }
             .frame(height: timedHeight)
-            .scrollDisabled(chrome.pointerCaptured)
+            .scrollDisabled(homeChrome.pointerCaptured)
             .modifier(ScrollOffsetTracker { hourScrollY = $0.y })
             .onAppear { jumpHours(vProxy) }
             .onChange(of: nowScrollGeneration) { _, _ in jumpHours(vProxy) }
@@ -248,30 +256,6 @@ struct DayCalendarView: View {
 
     private var days: [Date] {
         CalendarLayout.dayWindow(past: pastCount, future: futureCount, calendar: calendar)
-    }
-
-    /// Painted hour columns in scroller content space. Empty-hour taps are
-    /// timed (never all-day). Capsule pan uses these rects.
-    private var hourCanvasColumns: [CalendarLayout.HourCanvasColumn] {
-        days.map { day in
-            let iso = DateISO.dayString(from: day)
-            var timed = CalendarLayout.split(tasks: store.tasks(on: iso)).timed
-            var originals: [String: Double] = [:]
-            for task in timed {
-                originals[task.id] = task.duration
-            }
-            if let session = chrome.durationResize,
-               let slot = timed.firstIndex(where: { $0.id == session.taskID })
-            {
-                timed[slot].duration = session.previewDuration
-            }
-            let events = CalendarLayout.placeTimed(timed, pixelsPerHour: pixelsPerHour).map { event -> CalendarLayout.PlacedEvent in
-                var event = event
-                event.task.duration = originals[event.task.id] ?? event.task.duration
-                return event
-            }
-            return CalendarLayout.HourCanvasColumn(dayISO: iso, events: events)
-        }
     }
 
     private func scrollDays(_ proxy: ScrollViewProxy) {
@@ -299,13 +283,6 @@ struct DayCalendarView: View {
         if dayIndex >= days.count - 4, futureCount < 180 {
             futureCount += 14
         }
-    }
-}
-
-struct PaintedTimedCardKey: PreferenceKey {
-    static var defaultValue: [CalendarLayout.PaintedTimedCard] = []
-    static func reduce(value: inout [CalendarLayout.PaintedTimedCard], nextValue: () -> [CalendarLayout.PaintedTimedCard]) {
-        value.append(contentsOf: nextValue())
     }
 }
 

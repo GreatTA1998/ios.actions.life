@@ -539,10 +539,14 @@ struct HourScrollTouchBridge: UIViewRepresentable {
 /// Block-body tap → Details. Capsule pan → `setDuration`. Keep
 /// `canCancelContentTouches = false` (hours stayed 3–9). Never
 /// `isScrollEnabled = false`. `UIPanGestureRecognizer.touches*` take `UIEvent`.
+///
+/// Touches are `UIView.convert`ed into `blockFrame` space. Columns are
+/// read live so a create-then-title tap sees the new hour-7 card
+/// (`54090ed` snapshot + painted-frame fallback still missed).
 struct HourDurationPanBridge: UIViewRepresentable {
     var enabled: Bool
-    var columns: [CalendarLayout.HourCanvasColumn]
-    var paintedCards: [CalendarLayout.PaintedTimedCard]
+    var liveColumns: () -> [CalendarLayout.HourCanvasColumn]
+    var headerHeight: CGFloat
     var columnWidth: CGFloat
     var pixelsPerHour: Double
     var snap: Int
@@ -605,18 +609,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
             guard parent.enabled, !dragging, let scroll = gesture.view as? UIScrollView else { return }
-            let point = CalendarLayout.hourContentPoint(
-                locationInScroll: gesture.location(in: scroll),
-                scroll: scroll
-            )
-            switch CalendarLayout.hourCanvasHit(
-                contentPoint: point,
-                columns: parent.columns,
-                columnWidth: parent.columnWidth,
-                pixelsPerHour: parent.pixelsPerHour,
-                snap: parent.snap,
-                paintedCards: parent.paintedCards
-            ) {
+            switch canvasHit(in: scroll, locationInScroll: gesture.location(in: scroll)) {
             case .emptyHour(let dayISO, let minutes):
                 parent.onTimedCreate(dayISO, minutes)
             case .blockBody(let taskID):
@@ -624,6 +617,20 @@ struct HourDurationPanBridge: UIViewRepresentable {
             default:
                 break
             }
+        }
+
+        func canvasHit(in scroll: UIScrollView, locationInScroll: CGPoint) -> CalendarLayout.HourCanvasHit? {
+            CalendarLayout.hourCanvasHit(
+                contentPoint: CalendarLayout.blockFramePoint(
+                    locationInScroll: locationInScroll,
+                    scroll: scroll,
+                    headerHeight: parent.headerHeight
+                ),
+                columns: parent.liveColumns(),
+                columnWidth: parent.columnWidth,
+                pixelsPerHour: parent.pixelsPerHour,
+                snap: parent.snap
+            )
         }
 
         @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
@@ -668,14 +675,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
             if dragging { return gestureRecognizer === pan }
             guard parent.enabled, let scroll = gestureRecognizer.view as? UIScrollView else { return false }
-            let hit = CalendarLayout.hourCanvasHit(
-                contentPoint: CalendarLayout.hourContentPoint(touch: touch, in: scroll),
-                columns: parent.columns,
-                columnWidth: parent.columnWidth,
-                pixelsPerHour: parent.pixelsPerHour,
-                snap: parent.snap,
-                paintedCards: parent.paintedCards
-            )
+            let hit = canvasHit(in: scroll, locationInScroll: touch.location(in: scroll))
             if gestureRecognizer === pan {
                 if case .capsule(let target) = hit {
                     pendingHit = target

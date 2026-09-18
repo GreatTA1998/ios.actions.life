@@ -130,6 +130,107 @@ enum CalendarLayout {
         )
     }
 
+    /// Hour-canvas view `UIView.convert` should land on: the subview whose
+    /// bounds match `contentSize` (the HStack of day columns). Skip
+    /// indicators. If nothing matches, the scroll view itself — then
+    /// `blockFramePoint` applies `contentOffset`.
+    static func hourCanvasContentView(in scroll: UIScrollView) -> UIView {
+        let target = scroll.contentSize
+        var best: UIView = scroll
+        var bestScore = CGFloat.greatestFiniteMagnitude
+        for sub in scroll.subviews {
+            let name = String(describing: type(of: sub))
+            if name.contains("Indicator") || name.contains("UIImageView") { continue }
+            if sub.bounds.width < 2 || sub.bounds.height < 2 { continue }
+            let score = abs(sub.bounds.width - target.width) + abs(sub.bounds.height - target.height)
+            if score < bestScore {
+                bestScore = score
+                best = sub
+            }
+        }
+        return best
+    }
+
+    /// Convert a scroller location with `UIView.convert` into `blockFrame`
+    /// space (hour 0 at y = 0). Sticky all-day `headerHeight` and
+    /// `contentOffset` are the two terms that differ from scroll-view
+    /// bounds. Do not GeometryReader-fallback (`54090ed` still missed).
+    static func blockFramePoint(
+        locationInScroll: CGPoint,
+        scroll: UIScrollView,
+        headerHeight: CGFloat
+    ) -> CGPoint {
+        let canvas = hourCanvasContentView(in: scroll)
+        let converted = scroll.convert(locationInScroll, to: canvas)
+        return blockFramePoint(
+            converted: converted,
+            contentOffset: scroll.contentOffset,
+            boundsOrigin: scroll.bounds.origin,
+            headerHeight: headerHeight,
+            canvasSize: canvas.bounds.size,
+            contentSize: scroll.contentSize,
+            convertedFromScrollView: canvas === scroll,
+            canvasFrameOrigin: canvas === scroll ? .zero : canvas.frame.origin,
+            adjustedContentInset: scroll.adjustedContentInset,
+            horizontalContentOffset: enclosingHorizontalContentOffset(of: scroll)
+        )
+    }
+
+    static func blockFramePoint(touch: UITouch, in scroll: UIScrollView, headerHeight: CGFloat) -> CGPoint {
+        blockFramePoint(
+            locationInScroll: touch.location(in: scroll),
+            scroll: scroll,
+            headerHeight: headerHeight
+        )
+    }
+
+    /// Pure mapping used by tests and by the UIView.convert wrapper.
+    ///
+    /// - Convert onto a **content-sized** canvas already includes
+    ///   `contentOffset` when that canvas is shifted by `-offset` or the
+    ///   scroll view's `bounds.origin` equals `contentOffset`.
+    /// - Convert onto the scroll view / a viewport host still needs
+    ///   `contentOffset` so hour 7 paint matches `blockFrame.y`.
+    /// - If that canvas still includes the sticky all-day row, subtract
+    ///   `headerHeight`.
+    /// - Nested 1-axis: a viewport-wide hour canvas must add the parent
+    ///   day-strip X or today's column is index 0 (`e2fba41`).
+    static func blockFramePoint(
+        converted: CGPoint,
+        contentOffset: CGPoint,
+        boundsOrigin: CGPoint,
+        headerHeight: CGFloat,
+        canvasSize: CGSize,
+        contentSize: CGSize,
+        convertedFromScrollView: Bool,
+        canvasFrameOrigin: CGPoint = .zero,
+        adjustedContentInset: UIEdgeInsets = .zero,
+        horizontalContentOffset: CGFloat = 0
+    ) -> CGPoint {
+        var point = converted
+        let coversY = canvasSize.height >= contentSize.height - 1
+        let coversX = canvasSize.width >= contentSize.width - 1
+        let needsOffsetY = convertedFromScrollView
+            || !coversY
+            || (abs(canvasFrameOrigin.y) < 0.5 && abs(contentOffset.y - boundsOrigin.y) > 0.5)
+        let needsOffsetX = convertedFromScrollView
+            || !coversX
+            || (abs(canvasFrameOrigin.x) < 0.5 && abs(contentOffset.x - boundsOrigin.x) > 0.5)
+        if needsOffsetY {
+            point.y += contentOffset.y - boundsOrigin.y - adjustedContentInset.top
+        }
+        if needsOffsetX {
+            point.x += contentOffset.x - boundsOrigin.x - adjustedContentInset.left
+        }
+        if headerHeight > 1, canvasSize.height >= contentSize.height + headerHeight - 1 {
+            point.y -= headerHeight
+        }
+        if !coversX, canvasSize.width > 1, point.x <= canvasSize.width + 1 {
+            point.x += horizontalContentOffset
+        }
+        return point
+    }
+
     /// Convert a touch on the hour UIScrollView into content coordinates.
     /// Always use offset/bounds math — a SwiftUI content subview is often
     /// viewport-sized, so `location(in: canvas)` misses the painted capsule
@@ -210,7 +311,37 @@ enum CalendarLayout {
         var events: [PlacedEvent]
     }
 
-    /// Hit-test the hour canvas in **content** coordinates. Empty hours are
+    /// Live timed columns from the store. The scroller coordinator must not
+    /// keep a stale struct copy — `54090ed` then classified a title tap on
+    /// the new hour-7 card as empty hour.
+    static func hourCanvasColumns(
+        dayISOs: [String],
+        tasksOnDay: (String) -> [TaskSnapshot],
+        pixelsPerHour: Double,
+        previewTaskID: String? = nil,
+        previewDuration: Double? = nil
+    ) -> [HourCanvasColumn] {
+        dayISOs.map { iso in
+            var timed = split(tasks: tasksOnDay(iso)).timed
+            var originals: [String: Double] = [:]
+            for task in timed {
+                originals[task.id] = task.duration
+            }
+            if let previewTaskID, let previewDuration,
+               let slot = timed.firstIndex(where: { $0.id == previewTaskID })
+            {
+                timed[slot].duration = previewDuration
+            }
+            let events = placeTimed(timed, pixelsPerHour: pixelsPerHour).map { event -> PlacedEvent in
+                var event = event
+                event.task.duration = originals[event.task.id] ?? event.task.duration
+                return event
+            }
+            return HourCanvasColumn(dayISO: iso, events: events)
+        }
+    }
+
+    /// Hit-test the hour canvas in **blockFrame** coordinates. Empty hours are
     /// always timed (never all-day). Capsule wins over the card body.
     enum HourCanvasHit: Equatable {
         case capsule(DurationCapsuleTarget)
@@ -218,67 +349,15 @@ enum CalendarLayout {
         case emptyHour(dayISO: String, minutes: Int)
     }
 
-    /// Painted timed card in hour-canvas space (column X + event Y).
-    struct PaintedTimedCard: Equatable {
-        var taskID: String
-        var duration: Double
-        var frame: CGRect
-    }
-
-    static func paintedCardHit(
-        _ point: CGPoint,
-        cards: [PaintedTimedCard]
-    ) -> HourCanvasHit? {
-        for card in cards {
-            guard card.frame.width > 1, card.frame.height > 1 else { continue }
-            let capsule = CGRect(
-                x: card.frame.minX,
-                y: card.frame.maxY - HomeChrome.durationCapsuleHit,
-                width: card.frame.width,
-                height: HomeChrome.durationCapsuleHit
-            )
-            if touchHitsCapsule(point, capsule: capsule) {
-                return .capsule(
-                    DurationCapsuleTarget(taskID: card.taskID, duration: card.duration, rect: capsule)
-                )
-            }
-            let body = CGRect(
-                x: card.frame.minX,
-                y: card.frame.minY,
-                width: card.frame.width,
-                height: max(0, card.frame.height - HomeChrome.durationCapsuleHit)
-            )
-            if body.insetBy(dx: -6, dy: -2).contains(point) {
-                return .blockBody(taskID: card.taskID)
-            }
-        }
-        return nil
-    }
-
     static func hourCanvasHit(
         contentPoint: CGPoint,
         columns: [HourCanvasColumn],
         columnWidth: CGFloat,
         pixelsPerHour: Double,
-        snap: Int,
-        paintedCards: [PaintedTimedCard] = []
+        snap: Int
     ) -> HourCanvasHit? {
-        if let painted = paintedCardHit(contentPoint, cards: paintedCards) {
-            return painted
-        }
         guard columnWidth > 1, !columns.isEmpty else { return nil }
         let index = Int(floor(max(contentPoint.x, 0) / columnWidth))
-        if columns.indices.contains(index) {
-            let local = CGPoint(
-                x: contentPoint.x - CGFloat(index) * columnWidth,
-                y: contentPoint.y
-            )
-            // Painted frames may be column-local if the named space is the day
-            // column instead of the full hour HStack.
-            if let painted = paintedCardHit(local, cards: paintedCards) {
-                return painted
-            }
-        }
         guard columns.indices.contains(index) else { return nil }
         let column = columns[index]
         let local = CGPoint(
@@ -303,28 +382,6 @@ enum CalendarLayout {
         }
         for event in column.events {
             if blockContains(location: local, event: event, columnWidth: columnWidth) {
-                return .blockBody(taskID: event.task.id)
-            }
-        }
-        // Y-only in this column: `b40245f` treated a title tap on the hour-6
-        // block as empty hour (composer) because 2D local-X missed the paint.
-        for event in column.events {
-            let frame = blockFrame(event: event, columnWidth: columnWidth)
-            let capsule = durationCapsuleRect(columnIndex: 0, columnWidth: columnWidth, event: event)
-            if local.y >= capsule.minY - 4, local.y <= capsule.maxY + 4 {
-                return .capsule(
-                    DurationCapsuleTarget(
-                        taskID: event.task.id,
-                        duration: event.task.duration,
-                        rect: durationCapsuleRect(
-                            columnIndex: index,
-                            columnWidth: columnWidth,
-                            event: event
-                        )
-                    )
-                )
-            }
-            if local.y >= frame.minY, local.y < capsule.minY {
                 return .blockBody(taskID: event.task.id)
             }
         }
