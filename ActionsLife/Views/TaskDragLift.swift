@@ -588,6 +588,13 @@ struct HourDurationPanBridge: UIViewRepresentable {
         fileprivate var capturedTaskID: String?
         private var capturedStartDuration: Double = 30
         private var beganWindowY: CGFloat?
+        /// Hour scroller — pan may live on the window so the same `UITouch`
+        /// is followed after it leaves the 16pt capsule (`81ba98a` 35 min).
+        fileprivate weak var hourScroll: UIScrollView?
+        /// The capsule `UITouch` from `.began`. Sampled in window space
+        /// until `.ended` / `.cancelled`, even +80 pt below the 39pt card.
+        fileprivate weak var trackedTouch: UITouch?
+        private var followLink: CADisplayLink?
 
         init(parent: HourDurationPanBridge) {
             self.parent = parent
@@ -605,6 +612,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         deinit {
+            stopFollowingTouch()
             pan.view?.removeGestureRecognizer(pan)
             tap.view?.removeGestureRecognizer(tap)
             unlockOffsets()
@@ -687,6 +695,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
 
         func captureCapsule(from scroll: UIScrollView?, touch: UITouch) {
             beganWindowY = touch.location(in: touch.window ?? scroll).y
+            trackedTouch = touch
             if let scroll {
                 let location = touch.location(in: scroll)
                 let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: location)
@@ -698,6 +707,65 @@ struct HourDurationPanBridge: UIViewRepresentable {
             if capturedTaskID == nil, let hit = pendingHit ?? claimedTarget {
                 capturedTaskID = hit.taskID
                 capturedStartDuration = hit.duration
+            }
+            if capturedTaskID != nil {
+                beginFollowing(touch)
+            }
+        }
+
+        /// XCUITest / unit hook: same path `touchesMoved` uses after the
+        /// finger leaves the 16pt capsule.
+        func startWindowFollow(taskID: String, startDuration: Double, beganWindowY: CGFloat) {
+            capturedTaskID = taskID
+            capturedStartDuration = startDuration
+            self.beganWindowY = beganWindowY
+        }
+
+        func followWindowY(_ windowY: CGFloat, ended: Bool) {
+            writeStoreDuration(locationY: windowY, ended: ended)
+        }
+
+        /// Window-level pan sees every window touch. Only the hour scroller
+        /// may start a session — Details / list / all-day stay untouched.
+        /// Do not use `scroll.bounds.contains` — `bounds.origin` is the
+        /// content offset, so a scrolled hour grid (6–9) would reject the
+        /// capsule and duration would never start.
+        func hourScrollContains(_ touch: UITouch, scroll: UIScrollView) -> Bool {
+            guard let window = touch.window ?? scroll.window else { return true }
+            let windowPoint = touch.location(in: window)
+            guard let hit = window.hitTest(windowPoint, with: nil) else { return true }
+            return hit === scroll || hit.isDescendant(of: scroll)
+        }
+
+        func beginFollowing(_ touch: UITouch) {
+            trackedTouch = touch
+            guard followLink == nil else { return }
+            let link = CADisplayLink(target: self, selector: #selector(sampleTrackedTouch))
+            link.add(to: .main, forMode: .common)
+            followLink = link
+        }
+
+        func stopFollowingTouch() {
+            followLink?.invalidate()
+            followLink = nil
+            trackedTouch = nil
+        }
+
+        /// Keep writing window Y if `touchesMoved` is skipped after the
+        /// finger leaves the 16pt handle. Same `UITouch`, window space.
+        @objc func sampleTrackedTouch() {
+            guard let touch = trackedTouch, capturedTaskID != nil else { return }
+            let y = touch.location(in: touch.window).y
+            switch touch.phase {
+            case .began, .moved, .stationary:
+                writeStoreDuration(locationY: y, ended: false)
+                restoreLockedOffsets()
+            case .ended, .cancelled:
+                writeStoreDuration(locationY: y, ended: true)
+                clearCapsuleCapture()
+                dropClaim()
+            default:
+                break
             }
         }
 
@@ -753,6 +821,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
             claimedTarget = nil
             capturedTaskID = nil
             beganWindowY = nil
+            stopFollowingTouch()
         }
 
         func durationPanCancelled() {
@@ -762,6 +831,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
             claimedTarget = nil
             capturedTaskID = nil
             beganWindowY = nil
+            stopFollowingTouch()
             dropClaim()
             if wasDragging {
                 parent.onCancel()
@@ -773,8 +843,15 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            if dragging { return gestureRecognizer === pan }
-            guard parent.enabled, let scroll = gestureRecognizer.view as? UIScrollView else { return false }
+            if dragging || capturedTaskID != nil { return gestureRecognizer === pan }
+            guard parent.enabled else { return false }
+            let scroll = hourScroll ?? gestureRecognizer.view as? UIScrollView
+            guard let scroll else { return false }
+            // Pan may be on the window — do not claim list / all-day / Details
+            // taps that never landed in the hour scroller.
+            if gestureRecognizer === pan, !hourScrollContains(touch, scroll: scroll) {
+                return false
+            }
             let hit = canvasHit(in: scroll, locationInScroll: touch.location(in: scroll))
             if gestureRecognizer === pan {
                 if case .capsule(let target) = hit {
@@ -852,7 +929,8 @@ struct HourDurationPanBridge: UIViewRepresentable {
     }
 
     /// Writes `setDuration` from `touchesMoved` / `touchesEnded` using
-    /// `location.y − began.y` and the capsule UIView’s `task.id`.
+    /// window `location.y − began.y` and the capsule UIView’s `task.id`.
+    /// Delivery continues after the finger leaves the 16pt capsule.
     final class DurationPanRecognizer: UIGestureRecognizer {
         weak var owner: Coordinator?
 
@@ -872,32 +950,61 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 owner?.unlockOffsets()
                 return
             }
-            owner?.lockOffsets(from: view)
-            owner?.captureCapsule(from: view as? UIScrollView, touch: touch)
+            let scroll = owner?.hourScroll
+            owner?.lockOffsets(from: scroll ?? view)
+            owner?.captureCapsule(from: scroll, touch: touch)
             owner?.restoreLockedOffsets()
+            // Own the UITouch so delivery continues after it leaves the
+            // 16pt capsule (XCUITest then moves +80 pt below the card).
+            if owner?.capturedTaskID != nil {
+                cancelsTouchesInView = true
+                state = .began
+            }
         }
 
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
             super.touchesMoved(touches, with: event)
-            guard let touch = touches.first else { return }
+            // Follow the capsule `UITouch` in window space — not handle-local.
+            // Must still run when the finger is +80 pt below the 39pt card.
+            let touch = owner?.trackedTouch
+                ?? touches.first(where: { $0 === owner?.trackedTouch })
+                ?? touches.first
+            guard let touch else { return }
             owner?.restoreLockedOffsets()
-            owner?.writeStoreDuration(locationY: windowY(of: touch), ended: false)
+            if state == .began || state == .changed {
+                state = .changed
+            }
+            owner?.followWindowY(windowY(of: touch), ended: false)
             owner?.restoreLockedOffsets()
         }
 
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
-            if let touch = touches.first {
-                owner?.writeStoreDuration(locationY: windowY(of: touch), ended: true)
+            let touch = owner?.trackedTouch ?? touches.first
+            if let touch {
+                owner?.followWindowY(windowY(of: touch), ended: true)
             }
             owner?.clearCapsuleCapture()
             owner?.dropClaim()
-            state = .failed
+            cancelsTouchesInView = false
+            if state == .began || state == .changed {
+                state = .ended
+            } else {
+                state = .failed
+            }
             super.touchesEnded(touches, with: event)
             owner?.unlockOffsets()
         }
 
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
-            owner?.durationPanCancelled()
+            // Still commit window Y — the finger may already be +80 pt
+            // when the 16pt handle cancels.
+            let touch = owner?.trackedTouch ?? touches.first
+            if let touch, owner?.capturedTaskID != nil {
+                owner?.followWindowY(windowY(of: touch), ended: true)
+            }
+            owner?.clearCapsuleCapture()
+            owner?.dropClaim()
+            cancelsTouchesInView = false
             state = .cancelled
             super.touchesCancelled(touches, with: event)
             owner?.unlockOffsets()
@@ -960,10 +1067,14 @@ struct HourDurationPanBridge: UIViewRepresentable {
         private func attach(_ coordinator: Coordinator, to scroll: UIScrollView) {
             let pan = coordinator.pan
             let tap = coordinator.tap
-            if installedOn !== scroll || pan.view !== scroll {
+            coordinator.hourScroll = scroll
+            // Window so the same UITouch is followed after it leaves the
+            // 16pt capsule. Tap stays on the hour scroller (Details / create).
+            let host: UIView = scroll.window ?? scroll
+            if installedOn !== scroll || pan.view !== host {
                 pan.view?.removeGestureRecognizer(pan)
                 tap.view?.removeGestureRecognizer(tap)
-                scroll.addGestureRecognizer(pan)
+                host.addGestureRecognizer(pan)
                 scroll.addGestureRecognizer(tap)
                 installedOn = scroll
             }

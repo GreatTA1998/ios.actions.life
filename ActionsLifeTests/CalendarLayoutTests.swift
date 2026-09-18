@@ -824,6 +824,62 @@ final class CalendarLayoutTests: XCTestCase {
         )
     }
 
+    func testWindowFollowAtEightyPointsBelowCardStillWritesDuration() {
+        // `81ba98a`: drag starts in the 16pt capsule, then moves 80 pt
+        // *below* the 39pt card. If tracking dies at the handle edge,
+        // Details shows ~35 min and the painted block stays 39pt.
+        // minutes = 30 + (windowY − beganWindowY) / hourHeight * 60.
+        let card = CGRect(x: 50, y: 280.3, width: 168, height: 39.3)
+        let beganWindowY = card.maxY - 8
+        let movedWindowY = card.maxY + 80
+        XCTAssertGreaterThan(movedWindowY - beganWindowY, 16)
+
+        let hourH = CalendarLayout.hourHeight(pixelsPerHour: 50)
+        let minutes = 30 + (movedWindowY - beganWindowY) / hourH * 60
+        XCTAssertEqual(
+            CalendarLayout.durationFromLocationDelta(
+                start: 30,
+                locationDeltaY: movedWindowY - beganWindowY,
+                pixelsPerHour: 50
+            ),
+            minutes,
+            accuracy: 0.01
+        )
+        XCTAssertGreaterThan(minutes, 35)
+        XCTAssertEqual(CalendarLayout.snapDuration(minutes, snap: 15), 135)
+        XCTAssertGreaterThan(
+            CalendarLayout.blockFrameHeight(duration: minutes, y: 8 * 50, pixelsPerHour: 50),
+            39
+        )
+
+        var live: [(String, Double)] = []
+        var commits: [(String, Double)] = []
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { [] },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: 50,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { live.append(($0, $1)) },
+            onEnded: { commits.append(($0, $1)) },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        coordinator.bindStoreWrites(from: bridge)
+        coordinator.startWindowFollow(taskID: "pr3", startDuration: 30, beganWindowY: beganWindowY)
+        coordinator.followWindowY(movedWindowY, ended: false)
+        XCTAssertEqual(live.last?.0, "pr3")
+        XCTAssertEqual(live.last?.1, minutes, accuracy: 0.01)
+        XCTAssertGreaterThan(live.last?.1 ?? 0, 35)
+        coordinator.followWindowY(movedWindowY, ended: true)
+        XCTAssertEqual(commits.last?.0, "pr3")
+        XCTAssertEqual(commits.last?.1, CalendarLayout.snapDuration(minutes, snap: 15))
+    }
+
     func testCapsulePanTranslationGrowsBlockPastThirtyMinutes() {
         // Window location.y 50pt at 50px/hour: 30 min → 90 min end instant.
         // Painted height must exceed the 39pt 30-min capsule card.
