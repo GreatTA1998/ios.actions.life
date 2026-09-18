@@ -461,11 +461,10 @@ struct HoldThenDragBridge: UIViewRepresentable {
     }
 }
 
-/// Hour `UIScrollView` otherwise delays subview touches. Restore
-/// `canCancelContentTouches = false` so a capsule pan does not scroll hours
-/// (`e0d3900`–`fde5616` kept 2–9). Empty-hour scroll still works because the
-/// scroller itself is the hit target. Do **not** set `isScrollEnabled =
-/// false` on touch-down. `hitTest` is nil.
+/// Hour `UIScrollView` otherwise delays subview touches. Do **not** pin
+/// `canCancelContentTouches = false` here — that stayed after the capsule
+/// pan and froze hours (`b69d3c0`). The duration pan sets it only while
+/// tracking. Do **not** set `isScrollEnabled = false`. `hitTest` is nil.
 struct HourScrollTouchBridge: UIViewRepresentable {
     func makeUIView(context: Context) -> BridgeView {
         let view = BridgeView()
@@ -519,7 +518,6 @@ struct HourScrollTouchBridge: UIViewRepresentable {
                    scroll.contentSize.height > scroll.bounds.height + 1
                 {
                     scroll.delaysContentTouches = false
-                    scroll.canCancelContentTouches = false
                     return true
                 }
                 current = node.superview
@@ -536,8 +534,8 @@ struct HourScrollTouchBridge: UIViewRepresentable {
 /// Tap + duration pan on the hour `UIScrollView`. Empty-hour (nil `hitTest` /
 /// hour grid) stays timed create (`6b5a0c4` / `0884a7e`). Painted card body
 /// `hitTest` → Details. Painted 16pt capsule `hitTest` → `setDuration`.
-/// Keep `canCancelContentTouches = false`. Never `isScrollEnabled = false`.
-/// No TapView/HandleView. No `TimedCardLayout.place`.
+/// `canCancelContentTouches = false` only while the capsule pan tracks.
+/// Never `isScrollEnabled = false`. No TapView/HandleView. No `TimedCardLayout.place`.
 struct HourDurationPanBridge: UIViewRepresentable {
     var enabled: Bool
     var liveColumns: () -> [CalendarLayout.HourCanvasColumn]
@@ -578,13 +576,13 @@ struct HourDurationPanBridge: UIViewRepresentable {
         let tap = UITapGestureRecognizer()
         private(set) var dragging = false
         private var lockedOffsets: [(UIScrollView, CGPoint)] = []
+        private var savedCancelContentTouches: [(UIScrollView, Bool)] = []
         private var pendingHit: CalendarLayout.DurationCapsuleTarget?
 
         init(parent: HourDurationPanBridge) {
             self.parent = parent
             super.init()
             pan.owner = self
-            pan.addTarget(self, action: #selector(handlePan(_:)))
             pan.delegate = self
             // False so a tap on empty hour / title still reaches the recognizers
             // (`605f886` cancelled SpatialTap and create went all-day).
@@ -661,49 +659,52 @@ struct HourDurationPanBridge: UIViewRepresentable {
             return CalendarLayout.DurationCapsuleTarget(taskID: taskID, duration: 30, rect: .zero)
         }
 
-        @objc func handlePan(_ gesture: DurationPanRecognizer) {
-            // Window `location.y` delta → block end instant. Do not use
-            // `UIPanGestureRecognizer.translation` (0 while `.possible`, and
-            // overriding it at `b52d8de` failed the pan so hours scrolled).
-            let deltaY = gesture.trackedTranslationY
-            switch gesture.state {
-            case .began:
-                dragging = true
-                lockOffsets(from: gesture.view)
-                restoreLockedOffsets()
-                if pendingHit == nil, let scroll = gesture.view as? UIScrollView {
-                    if case .capsule(let target) = canvasHit(
-                        in: scroll,
-                        locationInScroll: gesture.location(in: scroll)
-                    ) {
-                        pendingHit = target
-                    }
+        /// Touch-driven, not target-action: `b69d3c0` set `.began` but never
+        /// delivered `.changed`/`.ended`, so `setDuration` did not run and
+        /// `require(toFail:)` left the hour grid stuck at the locked offset.
+        func durationPanBegan(in scroll: UIScrollView?, deltaY: CGFloat) {
+            dragging = true
+            lockOffsets(from: scroll ?? pan.view)
+            restoreLockedOffsets()
+            if pendingHit == nil, let scroll {
+                if case .capsule(let target) = canvasHit(
+                    in: scroll,
+                    locationInScroll: pan.location(in: scroll)
+                ) {
+                    pendingHit = target
                 }
-                if let hit = pendingHit {
-                    parent.onBegan(hit)
-                }
-                parent.onChanged(deltaY)
-            case .changed:
-                guard dragging else { return }
-                restoreLockedOffsets()
-                parent.onChanged(deltaY)
-            case .ended:
-                guard dragging else { return }
-                dragging = false
-                pendingHit = nil
-                parent.onChanged(deltaY)
-                unlockOffsets()
-                parent.onEnded()
-            case .cancelled, .failed:
-                let wasDragging = dragging
-                dragging = false
-                pendingHit = nil
-                unlockOffsets()
-                if wasDragging {
-                    parent.onCancel()
-                }
-            default:
-                break
+            }
+            if let hit = pendingHit {
+                parent.onBegan(hit)
+            }
+            parent.onChanged(deltaY)
+        }
+
+        func durationPanChanged(deltaY: CGFloat) {
+            guard dragging else { return }
+            restoreLockedOffsets()
+            parent.onChanged(deltaY)
+        }
+
+        func durationPanEnded(deltaY: CGFloat) {
+            guard dragging else {
+                dropClaim()
+                return
+            }
+            parent.onChanged(deltaY)
+            dragging = false
+            pendingHit = nil
+            dropClaim()
+            parent.onEnded()
+        }
+
+        func durationPanCancelled() {
+            let wasDragging = dragging
+            dragging = false
+            pendingHit = nil
+            dropClaim()
+            if wasDragging {
+                parent.onCancel()
             }
         }
 
@@ -748,9 +749,11 @@ struct HourDurationPanBridge: UIViewRepresentable {
         func lockOffsets(from view: UIView?) {
             guard lockedOffsets.isEmpty else { return }
             var found: [(UIScrollView, CGPoint)] = []
+            var saved: [(UIScrollView, Bool)] = []
             var current = view
             while let node = current {
                 if let scroll = node as? UIScrollView {
+                    saved.append((scroll, scroll.canCancelContentTouches))
                     scroll.canCancelContentTouches = false
                     scroll.delaysContentTouches = false
                     found.append((scroll, scroll.contentOffset))
@@ -758,6 +761,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 current = node.superview
             }
             lockedOffsets = found
+            savedCancelContentTouches = saved
         }
 
         func restoreLockedOffsets() {
@@ -766,35 +770,53 @@ struct HourDurationPanBridge: UIViewRepresentable {
             }
         }
 
-        func unlockOffsets() {
+        /// Unpin `contentOffset` and restore `canCancelContentTouches` so hours
+        /// can scroll again (`94e965c`). Never leave this lock after `.ended`
+        /// / `.cancelled`. Never `isScrollEnabled = false`.
+        func dropClaim() {
             restoreLockedOffsets()
+            for (scroll, previous) in savedCancelContentTouches {
+                scroll.canCancelContentTouches = previous
+            }
+            savedCancelContentTouches = []
             lockedOffsets = []
+        }
+
+        func unlockOffsets() {
+            dropClaim()
         }
     }
 
-    /// Capsule pan on the hour scroller. Not `UIPanGestureRecognizer`:
-    /// overriding `translation(in:)` / forcing `.began` on a UIPan at
-    /// `b52d8de` failed the recognizer, so `require(toFail:)` released and
-    /// hours scrolled. Window `location.y` is `trackedTranslationY`.
+    /// Capsule pan on the hour scroller. Callbacks run from the touch
+    /// methods (window `location.y` → `previewDuration`). UIKit state is
+    /// only for `require(toFail:)` — always end or fail so hours unpin.
     final class DurationPanRecognizer: UIGestureRecognizer {
         weak var owner: Coordinator?
         private(set) var trackedTranslationY: CGFloat = 0
         private var originWindowY: CGFloat = 0
+        private var recognized = false
 
         override func reset() {
             super.reset()
             originWindowY = 0
             trackedTranslationY = 0
+            recognized = false
+            owner?.unlockOffsets()
+            if owner?.dragging == true {
+                owner?.durationPanCancelled()
+            }
         }
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
             super.touchesBegan(touches, with: event)
             guard touches.count == 1, let touch = touches.first else {
                 state = .failed
+                owner?.unlockOffsets()
                 return
             }
             originWindowY = touch.location(in: nil).y
             trackedTranslationY = 0
+            recognized = false
             owner?.lockOffsets(from: view)
             owner?.restoreLockedOffsets()
         }
@@ -804,11 +826,17 @@ struct HourDurationPanBridge: UIViewRepresentable {
             guard let touch = touches.first else { return }
             trackedTranslationY = touch.location(in: nil).y - originWindowY
             owner?.restoreLockedOffsets()
-            if state == .possible {
+            if !recognized {
                 if abs(trackedTranslationY) >= 8 {
+                    recognized = true
+                    owner?.durationPanBegan(
+                        in: view as? UIScrollView,
+                        deltaY: trackedTranslationY
+                    )
                     state = .began
                 }
-            } else if state == .began || state == .changed {
+            } else {
+                owner?.durationPanChanged(deltaY: trackedTranslationY)
                 state = .changed
             }
             owner?.restoreLockedOffsets()
@@ -818,32 +846,37 @@ struct HourDurationPanBridge: UIViewRepresentable {
             if let touch = touches.first {
                 trackedTranslationY = touch.location(in: nil).y - originWindowY
             }
-            if state == .possible, abs(trackedTranslationY) >= 8 {
-                state = .began
+            if !recognized, abs(trackedTranslationY) >= 8 {
+                recognized = true
+                owner?.durationPanBegan(
+                    in: view as? UIScrollView,
+                    deltaY: trackedTranslationY
+                )
             }
-            if state == .began || state == .changed {
+            if recognized {
+                owner?.durationPanEnded(deltaY: trackedTranslationY)
                 state = .ended
-            } else if state == .possible {
+            } else {
+                owner?.durationPanCancelled()
                 state = .failed
             }
             super.touchesEnded(touches, with: event)
-            if state != .began && state != .changed && state != .ended {
-                owner?.unlockOffsets()
-            }
+            owner?.unlockOffsets()
         }
 
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+            owner?.durationPanCancelled()
             state = .cancelled
             super.touchesCancelled(touches, with: event)
             owner?.unlockOffsets()
         }
 
         override func canPrevent(_ other: UIGestureRecognizer) -> Bool {
-            state == .began || state == .changed
+            recognized || state == .began || state == .changed
         }
 
         override func canBePrevented(by other: UIGestureRecognizer) -> Bool {
-            !(state == .began || state == .changed)
+            !(recognized || state == .began || state == .changed)
         }
 
         override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {
@@ -905,7 +938,6 @@ struct HourDurationPanBridge: UIViewRepresentable {
             tap.require(toFail: pan)
             scroll.panGestureRecognizer.require(toFail: pan)
             scroll.delaysContentTouches = false
-            scroll.canCancelContentTouches = false
             isUserInteractionEnabled = false
         }
 
