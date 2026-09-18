@@ -648,6 +648,84 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(DateISO.dayString(from: days.last ?? now, calendar: calendar), "2026-09-21")
     }
 
+    func testHitTestPaintedCardBodyAndCapsuleNotEmptyHour() {
+        let hourH: CGFloat = 50
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 220, height: 400))
+        let canvas = UIView(frame: CGRect(x: 0, y: 0, width: 220, height: 24 * hourH))
+        scroll.addSubview(canvas)
+        scroll.contentSize = canvas.bounds.size
+
+        let grid = UIView(frame: canvas.bounds)
+        grid.accessibilityIdentifier = "calendar.hour-grid"
+        canvas.addSubview(grid)
+
+        let card = UIView(frame: CGRect(x: 6, y: 8 * hourH, width: 208, height: 36))
+        card.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        canvas.addSubview(card)
+        let title = UIView(frame: CGRect(x: 0, y: 0, width: 208, height: 20))
+        card.addSubview(title)
+        let capsule = UIView(frame: CGRect(x: 0, y: 20, width: 208, height: 16))
+        capsule.accessibilityIdentifier = CalendarLayout.timedCapsuleAccessibilityID("pr3")
+        card.addSubview(capsule)
+        scroll.layoutIfNeeded()
+
+        func hit(_ canvasPoint: CGPoint) -> CalendarLayout.PaintedCardHit? {
+            let inScroll = canvas.convert(canvasPoint, to: scroll)
+            let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: inScroll)
+            return CalendarLayout.paintedCardHit(
+                from: view,
+                locationInScroll: inScroll,
+                in: scroll
+            )
+        }
+
+        XCTAssertEqual(
+            hit(CGPoint(x: 100, y: 8 * hourH + 8)),
+            .blockBody(taskID: "pr3")
+        )
+        XCTAssertEqual(
+            hit(CGPoint(x: 100, y: 8 * hourH + 28)),
+            .capsule(taskID: "pr3")
+        )
+        XCTAssertNil(
+            hit(CGPoint(x: 100, y: 4 * hourH + 10)),
+            "empty hour stays timed create"
+        )
+    }
+
+    func testHitTestIgnoresCanvasHostAndHourZeroSpacer() {
+        let hourH: CGFloat = 50
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 220, height: 400))
+        let canvas = UIView(frame: CGRect(x: 0, y: 0, width: 220, height: 24 * hourH))
+        scroll.addSubview(canvas)
+        scroll.contentSize = canvas.bounds.size
+
+        let host = UIView(frame: canvas.bounds)
+        host.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        canvas.addSubview(host)
+
+        let spacer = UIView(frame: CGRect(x: 0, y: 0, width: 220, height: 8 * hourH + 36))
+        spacer.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        canvas.addSubview(spacer)
+        scroll.layoutIfNeeded()
+
+        XCTAssertTrue(CalendarLayout.isHourCanvasHost(host, scroll: scroll))
+        XCTAssertFalse(CalendarLayout.isPaintedCardSized(spacer, scroll: scroll))
+
+        func hit(_ canvasPoint: CGPoint) -> CalendarLayout.PaintedCardHit? {
+            let inScroll = canvas.convert(canvasPoint, to: scroll)
+            let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: inScroll)
+            return CalendarLayout.paintedCardHit(
+                from: view,
+                locationInScroll: inScroll,
+                in: scroll
+            )
+        }
+
+        XCTAssertNil(hit(CGPoint(x: 100, y: 8 * hourH + 8)))
+        XCTAssertNil(hit(CGPoint(x: 100, y: 4 * hourH + 10)))
+    }
+
     private func event(id: String = "timed", time: String, duration: Double) -> TaskSnapshot {
         TaskSnapshot(
             id: id,

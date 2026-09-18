@@ -91,6 +91,11 @@ struct CalendarEventCard: View {
         .background { DropZoneReporter(kind: .nest(task.id)) }
         .taskDragLift(id: task.id, name: task.name, duration: task.duration, fromCalendar: true, onDrop: onDrop)
         .contentShape(Rectangle())
+        .accessibilityIdentifier(
+            compact
+                ? "calendar.allday.\(task.id)"
+                : CalendarLayout.timedCardAccessibilityID(task.id)
+        )
         .onTapGesture {
             // `e2fba41`/`c7a355e` Details path: SwiftUI tap on the painted card.
             guard !compact, chrome.durationResize == nil, chrome.drag == nil else { return }
@@ -101,7 +106,8 @@ struct CalendarEventCard: View {
                 DurationEdgeHandle(task: task)
                     .frame(maxWidth: .infinity)
                     .frame(height: HomeChrome.durationCapsuleHit)
-                    .allowsHitTesting(false)
+                    .contentShape(Rectangle())
+                    .accessibilityIdentifier(CalendarLayout.timedCapsuleAccessibilityID(task.id))
             }
         }
     }
@@ -129,7 +135,9 @@ struct DurationEdgeHandle: View {
                         .frame(width: 22, height: 3)
                         .padding(.bottom, 4)
                 }
+                .allowsHitTesting(false)
             }
+            .contentShape(Rectangle())
             .accessibilityLabel("Resize duration")
     }
 }

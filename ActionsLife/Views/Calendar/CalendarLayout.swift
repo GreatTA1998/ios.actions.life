@@ -82,6 +82,19 @@ enum CalendarLayout {
         )
     }
 
+    /// Accessibility IDs on the painted timed card / 16pt capsule. Scroller
+    /// `hitTest` walks these. Spacer / canvas hosts must not carry them.
+    static let timedCardAccessibilityPrefix = "calendar.timed."
+    static let timedCapsuleAccessibilityPrefix = "calendar.capsule."
+
+    static func timedCardAccessibilityID(_ taskID: String) -> String {
+        timedCardAccessibilityPrefix + taskID
+    }
+
+    static func timedCapsuleAccessibilityID(_ taskID: String) -> String {
+        timedCapsuleAccessibilityPrefix + taskID
+    }
+
     /// Hour-grid SpatialTap must ignore only this rect — Y-only matched any event at
     /// that hour, and full-canvas card wrappers swallowed empty-hour taps (`d94cb61`).
     /// Bottom/side slop matches the visible capsule hit slop.
@@ -389,6 +402,92 @@ enum CalendarLayout {
             dayISO: column.dayISO,
             minutes: minutes(atY: local.y, pixelsPerHour: pixelsPerHour, snap: snap)
         )
+    }
+
+    /// `UIScrollView.hitTest` / content-view `hitTest` at the scroller point.
+    /// Nil and hour-grid views stay empty-hour create.
+    static func hourScrollHitView(in scroll: UIScrollView, locationInScroll: CGPoint) -> UIView? {
+        let canvas = hourCanvasContentView(in: scroll)
+        if canvas !== scroll {
+            let point = scroll.convert(locationInScroll, to: canvas)
+            if let hit = canvas.hitTest(point, with: nil) {
+                return hit
+            }
+        }
+        return scroll.hitTest(locationInScroll, with: nil)
+    }
+
+    enum PaintedCardHit: Equatable {
+        case capsule(taskID: String)
+        case blockBody(taskID: String)
+    }
+
+    /// Divert only when `hitTest` landed on the **painted card** (or its 16pt
+    /// capsule). Canvas-height hosts and hour-0 spacers are not cards
+    /// (`adce52c` / `TimedCardLayout.place`).
+    static func paintedCardHit(
+        from view: UIView?,
+        locationInScroll: CGPoint,
+        in scroll: UIScrollView
+    ) -> PaintedCardHit? {
+        var current = view
+        while let node = current {
+            if node is UIScrollView { break }
+            if node.bounds.width < 2 || node.bounds.height < 2 {
+                current = node.superview
+                continue
+            }
+            if isHourCanvasHost(node, scroll: scroll) { break }
+            if !isPaintedCardSized(node, scroll: scroll) { break }
+            let local = scroll.convert(locationInScroll, to: node)
+            guard node.bounds.insetBy(dx: -1, dy: -1).contains(local) else {
+                current = node.superview
+                continue
+            }
+            if let id = node.accessibilityIdentifier, !id.isEmpty {
+                if id.hasPrefix(timedCapsuleAccessibilityPrefix) {
+                    let taskID = String(id.dropFirst(timedCapsuleAccessibilityPrefix.count))
+                    if !taskID.isEmpty { return .capsule(taskID: taskID) }
+                }
+                if id.hasPrefix(timedCardAccessibilityPrefix) {
+                    let taskID = String(id.dropFirst(timedCardAccessibilityPrefix.count))
+                    if !taskID.isEmpty {
+                        if local.y >= node.bounds.height - 16 - 0.5 {
+                            return .capsule(taskID: taskID)
+                        }
+                        return .blockBody(taskID: taskID)
+                    }
+                }
+            }
+            current = node.superview
+        }
+        return nil
+    }
+
+    /// Full-column / viewport views that swallowed empty-hour create.
+    static func isHourCanvasHost(_ view: UIView, scroll: UIScrollView) -> Bool {
+        let height = view.bounds.height
+        let width = view.bounds.width
+        if scroll.contentSize.height > 8, height >= scroll.contentSize.height - 8 {
+            return true
+        }
+        if scroll.bounds.height > 8,
+           height >= scroll.bounds.height - 8,
+           width >= min(scroll.bounds.width, max(scroll.contentSize.width, 1)) - 8
+        {
+            return true
+        }
+        return false
+    }
+
+    /// Card body (~36pt+) or 16pt capsule — not a spacer from hour 0.
+    static func isPaintedCardSized(_ view: UIView, scroll: UIScrollView) -> Bool {
+        let height = view.bounds.height
+        guard height >= 12, view.bounds.width >= 32 else { return false }
+        if isHourCanvasHost(view, scroll: scroll) { return false }
+        if scroll.bounds.height > 8, height >= scroll.bounds.height - 8 { return false }
+        if scroll.contentSize.height > 8, height >= scroll.contentSize.height - 8 { return false }
+        return true
     }
 
     /// Bottom `handle` band of a UIKit view in window space. Zero-size
