@@ -463,8 +463,8 @@ struct HoldThenDragBridge: UIViewRepresentable {
 
 /// Immediate pan on the visible duration capsule (no long-press).
 ///
-/// Lives in a layout overlay at the capsule (spacer + 28pt), not inside a
-/// `.position()` / full-canvas card wrapper. Empty hours hit the hour grid.
+/// Lives on the timed card, not in a canvas-height overlay (those capsules
+/// sat on empty hour 2 and ate SpatialTap). Empty hours hit the hour grid.
 struct DurationResizeBridge: UIViewRepresentable {
     var enabled: Bool
     var onBegan: () -> Void

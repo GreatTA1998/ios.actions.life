@@ -9,8 +9,6 @@ struct CalendarEventCard: View {
     var onToggleChild: (String) -> Void = { _ in }
     var onDrop: (HomeChrome.DropTarget) -> Void
     var onResizeDuration: (Double) -> Void = { _ in }
-    /// Timed canvas draws the capsule in layout so empty hours stay tappable.
-    var showsDurationHandle: Bool = true
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
@@ -94,15 +92,15 @@ struct CalendarEventCard: View {
         .background { DropZoneReporter(kind: .nest(task.id)) }
         .taskDragLift(id: task.id, name: task.name, duration: task.duration, fromCalendar: true, onDrop: onDrop)
         .overlay(alignment: .bottom) {
-            if !compact, showsDurationHandle {
+            if !compact {
                 DurationEdgeHandle(task: task, onResize: onResizeDuration)
             }
         }
     }
 }
 
-/// 28pt duration edge. Timed canvas places this in layout at the capsule so
-/// UIKit can hit it; empty hours still reach hour-grid SpatialTap.
+/// 28pt duration edge on the visible card. Must not live in a canvas-height
+/// overlay — that painted stray capsules on empty hour 2 (`23f0dce`).
 struct DurationEdgeHandle: View {
     let task: TaskSnapshot
     var onResize: (Double) -> Void

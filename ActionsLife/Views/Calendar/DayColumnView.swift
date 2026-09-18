@@ -113,36 +113,13 @@ struct DayColumnView: View {
                     onOpen: { selectedTaskID = event.task.id },
                     onToggleChild: { store.toggleDone($0) },
                     onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) },
-                    showsDurationHandle: false
+                    onResizeDuration: { store.setDuration(event.task.id, minutes: $0) }
                 )
                 .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
-                // Offset (not a full-canvas VStack): hit box stays the card.
-                // Wrapping each card in a canvas-height stack stole empty-hour SpatialTap.
+                // Tight card + handle. A canvas-height capsule overlay sat on empty
+                // hour 2 (`23f0dce`) and ate SpatialTap. Do not restore that overlay.
                 .offset(x: 6, y: event.y)
             }
-            // Capsule in layout so UIKit can hit it. Color.clear + 28pt handle
-            // does not steal empty-hour taps (1485d29); the card VStack did.
-            Color.clear
-                .frame(width: columnWidth, height: canvasHeight)
-                .overlay(alignment: .topLeading) {
-                    ForEach(placed) { event in
-                        VStack(spacing: 0) {
-                            Color.clear
-                                .frame(height: max(0, durationHandleTop(for: event)))
-                                .allowsHitTesting(false)
-                            DurationEdgeHandle(
-                                task: event.task,
-                                onResize: { store.setDuration(event.task.id, minutes: $0) }
-                            )
-                            .frame(width: columnWidth - 12, height: HomeChrome.durationHandleHit)
-                            .padding(.leading, 6)
-                            Spacer(minLength: 0)
-                                .allowsHitTesting(false)
-                        }
-                        .frame(width: columnWidth, height: canvasHeight, alignment: .topLeading)
-                    }
-                }
-                .zIndex(12)
             if let preview = chrome.timedPreview(for: dayISO) {
                 CalendarDropPreview(height: preview.height)
                     .padding(.horizontal, 6)
@@ -225,22 +202,5 @@ struct DayColumnView: View {
         guard chrome.drag == nil, !chrome.isResizing, chrome.durationResize == nil else { return }
         composerText = ""
         calendarComposer = .allDay(dayISO: dayISO)
-    }
-
-    /// Keep the hit target on the start-duration edge so the gesture view does
-    /// not move while preview height changes.
-    private func durationHandleTop(for event: CalendarLayout.PlacedEvent) -> CGFloat {
-        let duration: Double
-        if let session = chrome.durationResize, session.taskID == event.task.id {
-            duration = session.startDuration
-        } else {
-            duration = event.task.duration
-        }
-        return CalendarLayout.durationHandleTop(
-            duration: duration,
-            y: event.y,
-            pixelsPerHour: pixelsPerHour,
-            handle: HomeChrome.durationHandleHit
-        )
     }
 }

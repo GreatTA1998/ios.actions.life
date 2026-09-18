@@ -112,30 +112,34 @@ final class CalendarLayoutTests: XCTestCase {
         )
     }
 
-    func testMorningBlockDoesNotClaimEmptyHourTwo() {
+    func testDurationCapsuleSitsOnCardNotNextHour() {
+        // 106 min from midnight is shorter than two hours; the capsule is the
+        // card bottom, not a stray overlay on empty hour 2 (`23f0dce`).
         let placed = CalendarLayout.placeTimed(
             [event(time: "00:00", duration: 106)],
             pixelsPerHour: 50
         )
-        let column: CGFloat = 220
-        XCTAssertFalse(
-            CalendarLayout.blockContains(
-                location: CGPoint(x: 40, y: 2 * 50),
-                event: placed[0],
-                columnWidth: column
-            )
-        )
-        let handleY = CalendarLayout.durationHandleTop(
+        let cardBottom = placed[0].y + max(placed[0].height, 36)
+        let handleTop = CalendarLayout.durationHandleTop(
             duration: 106,
             y: placed[0].y,
             pixelsPerHour: 50,
             handle: 28
         )
+        XCTAssertEqual(handleTop + 28, cardBottom, accuracy: 0.01)
+        XCTAssertLessThan(cardBottom, 2 * 50)
+        XCTAssertFalse(
+            CalendarLayout.blockContains(
+                location: CGPoint(x: 40, y: 2 * 50),
+                event: placed[0],
+                columnWidth: 220
+            )
+        )
         XCTAssertTrue(
             CalendarLayout.blockContains(
-                location: CGPoint(x: 40, y: handleY + 14),
+                location: CGPoint(x: 40, y: handleTop + 14),
                 event: placed[0],
-                columnWidth: column
+                columnWidth: 220
             )
         )
     }
