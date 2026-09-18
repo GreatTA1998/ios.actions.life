@@ -794,6 +794,25 @@ final class CalendarLayoutTests: XCTestCase {
         )
     }
 
+    func testEightyPointCapsuleDragWritesEndPastThirtyMinutes() {
+        // Simulator `05a5968`: 80pt (330.7→410.7) must not stay 30 min.
+        // minutes = start + deltaY / hourHeight * 60.
+        let hourH = CalendarLayout.hourHeight(pixelsPerHour: 50)
+        XCTAssertEqual(hourH, 50, accuracy: 0.01)
+        let minutes = CalendarLayout.durationFromLocationDelta(
+            start: 30,
+            locationDeltaY: 80,
+            pixelsPerHour: 50
+        )
+        XCTAssertEqual(minutes, 30 + 80 / 50 * 60, accuracy: 0.01)
+        XCTAssertGreaterThan(minutes, 30)
+        XCTAssertEqual(CalendarLayout.snapDuration(minutes, snap: 15), 120)
+        XCTAssertGreaterThan(
+            CalendarLayout.blockFrameHeight(duration: minutes, y: 9 * 50, pixelsPerHour: 50),
+            39
+        )
+    }
+
     func testCapsulePanTranslationGrowsBlockPastThirtyMinutes() {
         // Window location.y 50pt at 50px/hour: 30 min → 90 min end instant.
         // Painted height must exceed the 39pt 30-min capsule card.

@@ -222,11 +222,13 @@ struct DayCalendarView: View {
                         onBegan: { hit in
                             homeChrome.beginDurationResize(taskID: hit.taskID, duration: hit.duration)
                         },
-                        onChanged: { homeChrome.moveDurationResize(deltaY: $0, pixelsPerHour: pixels) },
-                        onEnded: {
-                            if let result = homeChrome.finishDurationResize() {
-                                treeStore.setDuration(result.taskID, minutes: result.duration)
-                            }
+                        onChanged: { taskID, minutes in
+                            // Same store write Details shows as “30 minutes”.
+                            treeStore.setDuration(taskID, minutes: minutes)
+                        },
+                        onEnded: { taskID, minutes in
+                            treeStore.setDuration(taskID, minutes: minutes)
+                            _ = homeChrome.finishDurationResize()
                         },
                         onCancel: { homeChrome.cancelDurationResize() }
                     )

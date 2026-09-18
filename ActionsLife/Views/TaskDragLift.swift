@@ -546,8 +546,9 @@ struct HourDurationPanBridge: UIViewRepresentable {
     var onTimedCreate: (_ dayISO: String, _ minutes: Int) -> Void
     var onOpenDetails: (_ taskID: String) -> Void
     var onBegan: (CalendarLayout.DurationCapsuleTarget) -> Void
-    var onChanged: (_ translationY: CGFloat) -> Void
-    var onEnded: () -> Void
+    /// Same API Details uses for “30 minutes”: `setDuration(taskID, minutes:)`.
+    var onChanged: (_ taskID: String, _ minutes: Double) -> Void
+    var onEnded: (_ taskID: String, _ minutes: Double) -> Void
     var onCancel: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -662,8 +663,16 @@ struct HourDurationPanBridge: UIViewRepresentable {
             return CalendarLayout.DurationCapsuleTarget(taskID: taskID, duration: 30, rect: .zero)
         }
 
-        /// Window `location.y` delta → `previewDuration` / `setDuration`.
-        /// Do not re-hitTest under the moved finger (that is empty hour).
+        /// minutes = start + deltaY / hourHeight * 60. Writes the painted
+        /// card’s id — the same `setDuration` Details binds as “30 minutes”.
+        func minutesForLocationDelta(_ deltaY: CGFloat, hit: CalendarLayout.DurationCapsuleTarget) -> Double {
+            CalendarLayout.durationFromLocationDelta(
+                start: hit.duration,
+                locationDeltaY: deltaY,
+                pixelsPerHour: parent.pixelsPerHour
+            )
+        }
+
         func applyLocationDelta(_ deltaY: CGFloat) {
             let hit = pendingHit ?? claimedTarget
             guard let hit else { return }
@@ -673,22 +682,27 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 dragging = true
                 parent.onBegan(hit)
             }
-            parent.onChanged(deltaY)
+            parent.onChanged(hit.taskID, minutesForLocationDelta(deltaY, hit: hit))
         }
 
         func durationPanEnded(deltaY: CGFloat) {
+            let hit = pendingHit ?? claimedTarget
             applyLocationDelta(deltaY)
-            guard dragging else {
+            guard let hit else {
                 dropClaim()
                 claimedTarget = nil
                 pendingHit = nil
                 return
             }
+            let minutes = CalendarLayout.snapDuration(
+                minutesForLocationDelta(deltaY, hit: hit),
+                snap: parent.snap
+            )
             dragging = false
             pendingHit = nil
             claimedTarget = nil
             dropClaim()
-            parent.onEnded()
+            parent.onEnded(hit.taskID, minutes)
         }
 
         func durationPanCancelled() {
