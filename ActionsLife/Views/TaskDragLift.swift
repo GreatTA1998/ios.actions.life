@@ -798,19 +798,19 @@ struct DurationHandleBridge: UIViewRepresentable {
             coordinator?.wireHourScroller(from: self)
         }
 
-        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
             super.touchesBegan(touches, with: event)
             guard let y = touches.first?.location(in: nil).y else { return }
             coordinator?.noteBegan(atY: y)
         }
 
-        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
             super.touchesMoved(touches, with: event)
             guard let y = touches.first?.location(in: nil).y else { return }
             coordinator?.noteChanged(atY: y)
         }
 
-        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
             super.touchesEnded(touches, with: event)
             if let y = touches.first?.location(in: nil).y {
                 coordinator?.noteChanged(atY: y)
@@ -818,7 +818,7 @@ struct DurationHandleBridge: UIViewRepresentable {
             coordinator?.noteEnded()
         }
 
-        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
             super.touchesCancelled(touches, with: event)
             coordinator?.noteCancelled()
         }
