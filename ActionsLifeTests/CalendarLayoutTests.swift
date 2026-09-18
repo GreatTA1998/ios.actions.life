@@ -229,6 +229,52 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(point.y, 270, accuracy: 0.01)
     }
 
+    func testHourCanvasHitEmptyHourIsTimedNotAllDay() {
+        // `605f886` parked PR3 timed in the all-day header (no 16pt capsule).
+        let placed = CalendarLayout.placeTimed(
+            [event(time: "06:00", duration: 30)],
+            pixelsPerHour: 50
+        )
+        let columns = [
+            CalendarLayout.HourCanvasColumn(dayISO: "2026-09-18", events: []),
+            CalendarLayout.HourCanvasColumn(dayISO: "2026-09-19", events: placed)
+        ]
+        let columnWidth: CGFloat = 220
+        let empty = CalendarLayout.hourCanvasHit(
+            contentPoint: CGPoint(x: columnWidth + 40, y: 4 * 50 + 10),
+            columns: columns,
+            columnWidth: columnWidth,
+            pixelsPerHour: 50,
+            snap: 15
+        )
+        XCTAssertEqual(empty, .emptyHour(dayISO: "2026-09-19", minutes: 4 * 60))
+        let title = CalendarLayout.hourCanvasHit(
+            contentPoint: CGPoint(x: columnWidth + 40, y: placed[0].y + 8),
+            columns: columns,
+            columnWidth: columnWidth,
+            pixelsPerHour: 50,
+            snap: 15
+        )
+        XCTAssertEqual(title, .blockBody(taskID: "timed"))
+        let capsuleRect = CalendarLayout.durationCapsuleRect(
+            columnIndex: 1,
+            columnWidth: columnWidth,
+            event: placed[0]
+        )
+        let handle = CalendarLayout.hourCanvasHit(
+            contentPoint: CGPoint(x: capsuleRect.midX, y: capsuleRect.midY),
+            columns: columns,
+            columnWidth: columnWidth,
+            pixelsPerHour: 50,
+            snap: 15
+        )
+        guard case .capsule(let target) = handle else {
+            return XCTFail("painted capsule must be a duration hit, not all-day")
+        }
+        XCTAssertEqual(target.taskID, "timed")
+        XCTAssertEqual(target.duration, 30, accuracy: 0.01)
+    }
+
     func testBlockFrameOriginMatchesPaintedCard() {
         // Spacer layout places the card at this origin (`e2fba41`/`c7a355e`).
         let placed = CalendarLayout.placeTimed(

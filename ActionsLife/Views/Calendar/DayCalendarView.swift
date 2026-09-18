@@ -190,11 +190,23 @@ struct DayCalendarView: View {
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
 
-                    // Pan lives on the hour scroller against painted capsules —
-                    // not a card UIView behind paint (`1fc1511`).
+                    // Tap + capsule pan on the hour scroller (`605f886` pan-only
+                    // ate SpatialTap, so empty-hour create went all-day).
                     HourDurationPanBridge(
                         enabled: chrome.drag == nil && !chrome.isResizing,
-                        capsules: durationCapsules,
+                        columns: hourCanvasColumns,
+                        columnWidth: columnWidth,
+                        pixelsPerHour: pixelsPerHour,
+                        snap: chrome.snapInterval,
+                        onTimedCreate: { dayISO, minutes in
+                            guard chrome.durationResize == nil, chrome.drag == nil else { return }
+                            composerText = ""
+                            calendarComposer = .timed(dayISO: dayISO, minutes: minutes)
+                        },
+                        onOpenDetails: { taskID in
+                            guard chrome.durationResize == nil, chrome.drag == nil else { return }
+                            selectedTaskID = taskID
+                        },
                         onBegan: { hit in
                             chrome.beginDurationResize(taskID: hit.taskID, duration: hit.duration)
                         },
@@ -234,10 +246,10 @@ struct DayCalendarView: View {
         CalendarLayout.dayWindow(past: pastCount, future: futureCount, calendar: calendar)
     }
 
-    /// Painted 16pt capsules in hour-scroller content space (columnIndex ×
-    /// columnWidth). The pan on that scroller hit-tests these, not a card UIView.
-    private var durationCapsules: [CalendarLayout.DurationCapsuleTarget] {
-        days.enumerated().flatMap { index, day -> [CalendarLayout.DurationCapsuleTarget] in
+    /// Painted hour columns in scroller content space. Empty-hour taps are
+    /// timed (never all-day). Capsule pan uses these rects.
+    private var hourCanvasColumns: [CalendarLayout.HourCanvasColumn] {
+        days.map { day in
             let iso = DateISO.dayString(from: day)
             var timed = CalendarLayout.split(tasks: store.tasks(on: iso)).timed
             var originals: [String: Double] = [:]
@@ -249,17 +261,12 @@ struct DayCalendarView: View {
             {
                 timed[slot].duration = session.previewDuration
             }
-            return CalendarLayout.placeTimed(timed, pixelsPerHour: pixelsPerHour).map { event in
-                CalendarLayout.DurationCapsuleTarget(
-                    taskID: event.task.id,
-                    duration: originals[event.task.id] ?? event.task.duration,
-                    rect: CalendarLayout.durationCapsuleRect(
-                        columnIndex: index,
-                        columnWidth: columnWidth,
-                        event: event
-                    )
-                )
+            let events = CalendarLayout.placeTimed(timed, pixelsPerHour: pixelsPerHour).map { event -> CalendarLayout.PlacedEvent in
+                var event = event
+                event.task.duration = originals[event.task.id] ?? event.task.duration
+                return event
             }
+            return CalendarLayout.HourCanvasColumn(dayISO: iso, events: events)
         }
     }
 

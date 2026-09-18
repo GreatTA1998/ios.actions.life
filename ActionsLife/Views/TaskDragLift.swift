@@ -533,15 +533,20 @@ struct HourScrollTouchBridge: UIViewRepresentable {
     }
 }
 
-/// Duration pan on the hour `UIScrollView` — the view actually under the
-/// finger at the painted 16pt capsule. Card UIViewRepresentables were not
-/// in the hit path (`fde5616`/`1fc1511`). `shouldReceive` uses content-space
-/// capsule rects (nested day-strip X included). Pin `contentOffset` instead
-/// of `isScrollEnabled`. `UIPanGestureRecognizer.touches*` take `UIEvent`
-/// (not `UIEvent?` — `9e9bdee` did not compile).
+/// Tap + duration pan on the hour `UIScrollView` — the view under the finger
+/// (`605f886` pan-only stole SpatialTap, so empty-hour create landed in the
+/// all-day header). Empty-hour tap → timed composer (~30 min + 16pt capsule).
+/// Block-body tap → Details. Capsule pan → `setDuration`. Keep
+/// `canCancelContentTouches = false` (hours stayed 3–9). Never
+/// `isScrollEnabled = false`. `UIPanGestureRecognizer.touches*` take `UIEvent`.
 struct HourDurationPanBridge: UIViewRepresentable {
     var enabled: Bool
-    var capsules: [CalendarLayout.DurationCapsuleTarget]
+    var columns: [CalendarLayout.HourCanvasColumn]
+    var columnWidth: CGFloat
+    var pixelsPerHour: Double
+    var snap: Int
+    var onTimedCreate: (_ dayISO: String, _ minutes: Int) -> Void
+    var onOpenDetails: (_ taskID: String) -> Void
     var onBegan: (CalendarLayout.DurationCapsuleTarget) -> Void
     var onChanged: (_ translationY: CGFloat) -> Void
     var onEnded: () -> Void
@@ -561,6 +566,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
         context.coordinator.parent = self
         if !context.coordinator.dragging {
             context.coordinator.pan.isEnabled = enabled
+            context.coordinator.tap.isEnabled = enabled
         }
         uiView.coordinator = context.coordinator
         uiView.ensureInstalled()
@@ -569,6 +575,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: HourDurationPanBridge
         let pan = DurationPanRecognizer()
+        let tap = UITapGestureRecognizer()
         private(set) var dragging = false
         private var lockedOffsets: [(UIScrollView, CGPoint)] = []
         private var pendingHit: CalendarLayout.DurationCapsuleTarget?
@@ -579,13 +586,42 @@ struct HourDurationPanBridge: UIViewRepresentable {
             pan.owner = self
             pan.addTarget(self, action: #selector(handlePan(_:)))
             pan.delegate = self
-            pan.cancelsTouchesInView = true
+            // False so a tap on empty hour / title still reaches the recognizers
+            // (`605f886` cancelled SpatialTap and create went all-day).
+            pan.cancelsTouchesInView = false
             pan.maximumNumberOfTouches = 1
+            tap.addTarget(self, action: #selector(handleTap(_:)))
+            tap.delegate = self
+            tap.cancelsTouchesInView = true
+            tap.numberOfTapsRequired = 1
         }
 
         deinit {
             pan.view?.removeGestureRecognizer(pan)
+            tap.view?.removeGestureRecognizer(tap)
             unlockOffsets()
+        }
+
+        @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+            guard parent.enabled, !dragging, let scroll = gesture.view as? UIScrollView else { return }
+            let point = CalendarLayout.hourContentPoint(
+                locationInScroll: gesture.location(in: scroll),
+                scroll: scroll
+            )
+            switch CalendarLayout.hourCanvasHit(
+                contentPoint: point,
+                columns: parent.columns,
+                columnWidth: parent.columnWidth,
+                pixelsPerHour: parent.pixelsPerHour,
+                snap: parent.snap
+            ) {
+            case .emptyHour(let dayISO, let minutes):
+                parent.onTimedCreate(dayISO, minutes)
+            case .blockBody(let taskID):
+                parent.onOpenDetails(taskID)
+            default:
+                break
+            }
         }
 
         @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
@@ -595,9 +631,6 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 dragging = true
                 lockOffsets(from: gesture.view)
                 restoreLockedOffsets()
-                // Hit was captured in shouldReceive — after an 8pt force-`.began`
-                // the finger has left the 16pt band, so looking up again misses
-                // and `setDuration` never runs (`1fc1511`).
                 if let hit = pendingHit {
                     parent.onBegan(hit)
                 }
@@ -631,13 +664,29 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            if dragging { return true }
+            if dragging { return gestureRecognizer === pan }
             guard parent.enabled, let scroll = gestureRecognizer.view as? UIScrollView else { return false }
-            pendingHit = CalendarLayout.hitDurationCapsule(
+            let hit = CalendarLayout.hourCanvasHit(
                 contentPoint: CalendarLayout.hourContentPoint(touch: touch, in: scroll),
-                capsules: parent.capsules
+                columns: parent.columns,
+                columnWidth: parent.columnWidth,
+                pixelsPerHour: parent.pixelsPerHour,
+                snap: parent.snap
             )
-            return pendingHit != nil
+            if gestureRecognizer === pan {
+                if case .capsule(let target) = hit {
+                    pendingHit = target
+                    return true
+                }
+                pendingHit = nil
+                return false
+            }
+            switch hit {
+            case .emptyHour, .blockBody:
+                return true
+            default:
+                return false
+            }
         }
 
         func gestureRecognizer(
@@ -692,8 +741,6 @@ struct HourDurationPanBridge: UIViewRepresentable {
             owner?.restoreLockedOffsets()
             super.touchesMoved(touches, with: event)
             owner?.restoreLockedOffsets()
-            // UIScrollView otherwise keeps a sibling pan at `.possible` for the
-            // whole drag (`a0da6ed`): hours stay still and duration never commits.
             if state == .possible {
                 let delta = translation(in: nil)
                 if abs(delta.y) >= 8 {
@@ -748,7 +795,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
         func ensureInstalled() {
             guard let coordinator else { return }
             if let scroll = nearestVerticalScrollView() {
-                attach(coordinator.pan, to: scroll)
+                attach(coordinator, to: scroll)
                 return
             }
             installToken += 1
@@ -762,7 +809,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
         private func retryInstall(token: Int, remaining: Int) {
             guard token == installToken else { return }
             if let coordinator, let scroll = nearestVerticalScrollView() {
-                attach(coordinator.pan, to: scroll)
+                attach(coordinator, to: scroll)
                 return
             }
             guard remaining > 0 else { return }
@@ -771,12 +818,17 @@ struct HourDurationPanBridge: UIViewRepresentable {
             }
         }
 
-        private func attach(_ pan: UIPanGestureRecognizer, to scroll: UIScrollView) {
+        private func attach(_ coordinator: Coordinator, to scroll: UIScrollView) {
+            let pan = coordinator.pan
+            let tap = coordinator.tap
             if installedOn !== scroll || pan.view !== scroll {
                 pan.view?.removeGestureRecognizer(pan)
+                tap.view?.removeGestureRecognizer(tap)
                 scroll.addGestureRecognizer(pan)
+                scroll.addGestureRecognizer(tap)
                 installedOn = scroll
             }
+            tap.require(toFail: pan)
             scroll.panGestureRecognizer.require(toFail: pan)
             scroll.delaysContentTouches = false
             scroll.canCancelContentTouches = false

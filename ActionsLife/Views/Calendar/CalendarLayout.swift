@@ -140,8 +140,12 @@ enum CalendarLayout {
     /// capsules at `todayIndex × columnWidth`). Full-width hour content already
     /// includes that X — do not add the parent offset twice.
     static func hourContentPoint(touch: UITouch, in scroll: UIScrollView) -> CGPoint {
+        hourContentPoint(locationInScroll: touch.location(in: scroll), scroll: scroll)
+    }
+
+    static func hourContentPoint(locationInScroll: CGPoint, scroll: UIScrollView) -> CGPoint {
         hourContentPoint(
-            locationInScroll: touch.location(in: scroll),
+            locationInScroll: locationInScroll,
             contentOffset: scroll.contentOffset,
             boundsOrigin: scroll.bounds.origin,
             adjustedContentInset: scroll.adjustedContentInset,
@@ -198,6 +202,62 @@ enum CalendarLayout {
         capsules: [DurationCapsuleTarget]
     ) -> DurationCapsuleTarget? {
         capsules.first { touchHitsCapsule(contentPoint, capsule: $0.rect) }
+    }
+
+    /// One day column in hour-scroller content space (index × columnWidth).
+    struct HourCanvasColumn: Equatable {
+        var dayISO: String
+        var events: [PlacedEvent]
+    }
+
+    /// Hit-test the hour canvas in **content** coordinates. Empty hours are
+    /// always timed (never all-day). Capsule wins over the card body.
+    enum HourCanvasHit: Equatable {
+        case capsule(DurationCapsuleTarget)
+        case blockBody(taskID: String)
+        case emptyHour(dayISO: String, minutes: Int)
+    }
+
+    static func hourCanvasHit(
+        contentPoint: CGPoint,
+        columns: [HourCanvasColumn],
+        columnWidth: CGFloat,
+        pixelsPerHour: Double,
+        snap: Int
+    ) -> HourCanvasHit? {
+        guard columnWidth > 1, !columns.isEmpty else { return nil }
+        let index = Int(floor(contentPoint.x / columnWidth))
+        guard columns.indices.contains(index) else { return nil }
+        let column = columns[index]
+        let local = CGPoint(
+            x: contentPoint.x - CGFloat(index) * columnWidth,
+            y: contentPoint.y
+        )
+        for event in column.events {
+            let capsule = durationCapsuleRect(columnIndex: 0, columnWidth: columnWidth, event: event)
+            if touchHitsCapsule(local, capsule: capsule) {
+                return .capsule(
+                    DurationCapsuleTarget(
+                        taskID: event.task.id,
+                        duration: event.task.duration,
+                        rect: durationCapsuleRect(
+                            columnIndex: index,
+                            columnWidth: columnWidth,
+                            event: event
+                        )
+                    )
+                )
+            }
+        }
+        for event in column.events {
+            if blockContains(location: local, event: event, columnWidth: columnWidth) {
+                return .blockBody(taskID: event.task.id)
+            }
+        }
+        return .emptyHour(
+            dayISO: column.dayISO,
+            minutes: minutes(atY: local.y, pixelsPerHour: pixelsPerHour, snap: snap)
+        )
     }
 
     /// Bottom `handle` band of a UIKit view in window space. Zero-size
