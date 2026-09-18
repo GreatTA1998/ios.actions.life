@@ -9,6 +9,7 @@ struct CalendarEventCard: View {
     var onToggleChild: (String) -> Void = { _ in }
     var onDrop: (HomeChrome.DropTarget) -> Void
     var onResizeDuration: (Double) -> Void = { _ in }
+    var cardHeight: CGFloat = 36
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
@@ -93,31 +94,34 @@ struct CalendarEventCard: View {
         .taskDragLift(id: task.id, name: task.name, duration: task.duration, fromCalendar: true, onDrop: onDrop)
         .overlay(alignment: .bottom) {
             if !compact {
+                let handleHeight = HomeChrome.durationResizeHandleHeight(cardHeight: cardHeight)
                 DurationEdgeHandle(
                     task: task,
-                    onResize: onResizeDuration
+                    onResize: onResizeDuration,
+                    handleHeight: handleHeight
                 )
                 .frame(maxWidth: .infinity)
-                .frame(height: HomeChrome.durationCapsuleHit)
+                .frame(height: handleHeight)
             }
         }
     }
 }
 
-/// Painted 16pt capsule on the timed card. SwiftUI `DragGesture` lives on this
-/// view (the XCUITest finger's SwiftUI hit target), simultaneous with scroll
-/// like web. `translation.height` writes the block end. After the drag is
-/// active, ancestor hour scrollers are offset-pinned — never `isScrollEnabled
-/// = false` on touch-down (`a0da6ed`). Card-body taps still open Details.
+/// Bottom-half duration handle on the timed card. `highPriorityGesture`
+/// `DragGesture` (not `simultaneousGesture` — that lost to the hour scroller
+/// at `c7a355e`). `translation.height` writes the block end. After the drag
+/// has begun, ancestor hour scrollers are offset-pinned — never
+/// `isScrollEnabled = false` on touch-down. Title / top-half taps open Details.
 struct DurationEdgeHandle: View {
     let task: TaskSnapshot
     var onResize: (Double) -> Void
+    var handleHeight: CGFloat
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
         Color.primary.opacity(0.001)
             .frame(maxWidth: .infinity)
-            .frame(height: HomeChrome.durationCapsuleHit)
+            .frame(height: handleHeight)
             .contentShape(Rectangle())
             .overlay(alignment: .bottom) {
                 VStack(spacing: 4) {
@@ -133,7 +137,7 @@ struct DurationEdgeHandle: View {
                 }
                 .allowsHitTesting(false)
             }
-            .simultaneousGesture(durationDrag)
+            .highPriorityGesture(durationDrag)
             .background {
                 ScrollOffsetLockBridge(locked: chrome.durationResize?.taskID == task.id)
             }

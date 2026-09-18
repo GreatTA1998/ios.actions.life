@@ -212,7 +212,7 @@ final class DragDropTests: XCTestCase {
     }
 
     func testDurationPanHitsVisibleCapsuleNotCardBody() {
-        // 16pt capsule at the bottom of a 36pt card in hour-scroller content space.
+        // Bottom-half handle on a 36pt card; title (top half) still opens Details.
         let event = CalendarLayout.placeTimed(
             [TaskSnapshot(
                 id: "timed",
@@ -231,21 +231,22 @@ final class DragDropTests: XCTestCase {
             )],
             pixelsPerHour: 50
         )[0]
-        let capsule = CalendarLayout.durationCapsuleRect(
-            columnIndex: 14,
-            columnWidth: 220,
-            event: event
+        let cardHeight = max(event.height, 36)
+        let handleHeight = HomeChrome.durationResizeHandleHeight(cardHeight: cardHeight)
+        XCTAssertEqual(handleHeight, 18, accuracy: 0.01)
+        XCTAssertGreaterThanOrEqual(handleHeight, cardHeight / 2)
+        let handle = CGRect(
+            x: 6,
+            y: event.y + cardHeight - handleHeight,
+            width: 200,
+            height: handleHeight
         )
-        XCTAssertEqual(capsule.minY, event.y + 36 - 16, accuracy: 0.01)
         XCTAssertFalse(
-            CalendarLayout.touchHitsCapsule(CGPoint(x: capsule.midX, y: event.y + 8), capsule: capsule),
-            "card body must not be the duration pan"
+            CalendarLayout.touchHitsCapsule(CGPoint(x: handle.midX, y: event.y + 8), capsule: handle),
+            "title / top half must still open Details"
         )
         XCTAssertTrue(
-            CalendarLayout.touchHitsCapsule(CGPoint(x: capsule.midX, y: capsule.midY), capsule: capsule)
-        )
-        XCTAssertFalse(
-            CalendarLayout.touchHitsCapsule(CGPoint(x: capsule.midX, y: capsule.midY), capsule: .null)
+            CalendarLayout.touchHitsCapsule(CGPoint(x: handle.midX, y: handle.midY), capsule: handle)
         )
     }
 
