@@ -536,13 +536,13 @@ struct HourScrollTouchBridge: UIViewRepresentable {
 /// Tap + duration pan on the hour `UIScrollView` — the view under the finger
 /// (`605f886` pan-only stole SpatialTap, so empty-hour create landed in the
 /// all-day header). Empty-hour tap → timed composer (~30 min + 16pt capsule).
-/// Block-body tap → Details. Capsule pan → `setDuration`. Keep
-/// `canCancelContentTouches = false` (hours stayed 3–9). Never
+/// Painted card `hitTest` → Details. Capsule `hitTest` → `setDuration`. Keep
+/// `canCancelContentTouches = false` (hours stayed 4–9). Never
 /// `isScrollEnabled = false`. `UIPanGestureRecognizer.touches*` take `UIEvent`.
 ///
-/// Touches are `UIView.convert`ed into `blockFrame` space. Columns are
-/// read live so a create-then-title tap sees the new hour-7 card
-/// (`54090ed` snapshot + painted-frame fallback still missed).
+/// Do **not** classify the painted card with `blockFrame` (`54090ed` /
+/// `9678340` missed). `UIScrollView.hitTest` / content-view `hitTest` at
+/// the touch. Nil / hour grid keeps empty-hour create.
 struct HourDurationPanBridge: UIViewRepresentable {
     var enabled: Bool
     var liveColumns: () -> [CalendarLayout.HourCanvasColumn]
@@ -620,7 +620,26 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         func canvasHit(in scroll: UIScrollView, locationInScroll: CGPoint) -> CalendarLayout.HourCanvasHit? {
-            CalendarLayout.hourCanvasHit(
+            let hitView = CalendarLayout.hourScrollHitView(
+                in: scroll,
+                locationInScroll: locationInScroll
+            )
+            if CalendarLayout.hourScrollHitIsControl(hitView) {
+                return nil
+            }
+            if let painted = CalendarLayout.paintedCardHit(
+                from: hitView,
+                locationInScroll: locationInScroll,
+                in: scroll
+            ) {
+                switch painted {
+                case .blockBody(let taskID):
+                    return .blockBody(taskID: taskID)
+                case .capsule(let taskID):
+                    return .capsule(capsuleTarget(taskID: taskID))
+                }
+            }
+            return CalendarLayout.emptyHourHit(
                 contentPoint: CalendarLayout.blockFramePoint(
                     locationInScroll: locationInScroll,
                     scroll: scroll,
@@ -631,6 +650,23 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 pixelsPerHour: parent.pixelsPerHour,
                 snap: parent.snap
             )
+        }
+
+        func capsuleTarget(taskID: String) -> CalendarLayout.DurationCapsuleTarget {
+            for (index, column) in parent.liveColumns().enumerated() {
+                if let event = column.events.first(where: { $0.task.id == taskID }) {
+                    return CalendarLayout.DurationCapsuleTarget(
+                        taskID: taskID,
+                        duration: event.task.duration,
+                        rect: CalendarLayout.durationCapsuleRect(
+                            columnIndex: index,
+                            columnWidth: parent.columnWidth,
+                            event: event
+                        )
+                    )
+                }
+            }
+            return CalendarLayout.DurationCapsuleTarget(taskID: taskID, duration: 30, rect: .zero)
         }
 
         @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
