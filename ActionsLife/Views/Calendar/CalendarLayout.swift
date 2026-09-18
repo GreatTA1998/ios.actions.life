@@ -68,6 +68,11 @@ enum CalendarLayout {
         y + blockFrameHeight(duration: duration, y: y, pixelsPerHour: pixelsPerHour) - handle
     }
 
+    static func blockContains(y: CGFloat, event: PlacedEvent) -> Bool {
+        let height = max(event.height, 36)
+        return y >= event.y && y <= event.y + height
+    }
+
     static func scrollTargetHour(now: Date = .now, calendar: Calendar = .current) -> Int {
         let hour = calendar.component(.hour, from: now)
         return min(max(hour - 1, startHour), max(endHour - 4, startHour))

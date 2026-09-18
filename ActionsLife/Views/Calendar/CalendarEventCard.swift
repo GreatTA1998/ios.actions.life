@@ -8,6 +8,7 @@ struct CalendarEventCard: View {
     var onOpen: () -> Void
     var onToggleChild: (String) -> Void = { _ in }
     var onDrop: (HomeChrome.DropTarget) -> Void
+    var onResizeDuration: (Double) -> Void = { _ in }
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
@@ -28,7 +29,10 @@ struct CalendarEventCard: View {
                     .lineLimit(compact ? 1 : 3)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
-                    .onTapGesture(perform: onOpen)
+                    .onTapGesture {
+                        guard chrome.durationResize == nil, chrome.drag == nil else { return }
+                        onOpen()
+                    }
 
                 if !children.isEmpty {
                     Text("\(children.filter(\.isDone).count)/\(children.count)")
@@ -89,19 +93,15 @@ struct CalendarEventCard: View {
         .taskDragLift(id: task.id, name: task.name, duration: task.duration, fromCalendar: true, onDrop: onDrop)
         .overlay(alignment: .bottom) {
             if !compact {
-                Capsule()
-                    .fill(Theme.handle)
-                    .frame(width: 22, height: 3)
-                    .padding(.bottom, 4)
-                    .allowsHitTesting(false)
+                DurationEdgeHandle(task: task, onResize: onResizeDuration)
             }
         }
     }
 }
 
-/// 28pt duration edge in **layout** (padding/offset in the canvas), not inside a
-/// `.position()` card. UIViewRepresentable hit-testing does not follow `.position()`,
-/// which is why the hour-scroller pan never saw the finger at hour 22.
+/// 28pt duration edge on the card. The card itself is in canvas **layout**
+/// (not `.position()`), so this overlay is hittable at the gray capsule.
+/// Pan must beat the hour-grid SpatialTap (composer/keyboard) and the title tap.
 struct DurationEdgeHandle: View {
     let task: TaskSnapshot
     var onResize: (Double) -> Void
@@ -110,36 +110,40 @@ struct DurationEdgeHandle: View {
     @State private var startY: CGFloat = 0
 
     var body: some View {
-        DurationResizeBridge(
-            enabled: chrome.drag == nil && !chrome.isResizing
-                && (chrome.durationResize == nil || chrome.durationResize?.taskID == task.id),
-            onBegan: beginIfNeeded,
-            onChanged: { chrome.moveDurationResize(deltaY: $0) },
-            onEnded: finishIfNeeded,
-            onCancel: {
-                swiftUIDrag = false
-                chrome.cancelDurationResize()
-            }
-        )
-        .frame(maxWidth: .infinity)
-        .frame(height: HomeChrome.durationHandleHit)
-        .contentShape(Rectangle())
-        .overlay(alignment: .bottom) {
-            VStack(spacing: 4) {
-                if chrome.durationResize?.taskID == task.id {
-                    Rectangle()
-                        .fill(Theme.dragPreview.opacity(0.85))
-                        .frame(height: 1)
+        Color.primary.opacity(0.001)
+            .frame(maxWidth: .infinity)
+            .frame(height: HomeChrome.durationHandleHit)
+            .contentShape(Rectangle())
+            .overlay(alignment: .bottom) {
+                VStack(spacing: 4) {
+                    if chrome.durationResize?.taskID == task.id {
+                        Rectangle()
+                            .fill(Theme.dragPreview.opacity(0.85))
+                            .frame(height: 1)
+                    }
+                    Capsule()
+                        .fill(Theme.handle)
+                        .frame(width: 22, height: 3)
+                        .padding(.bottom, 4)
                 }
-                Capsule()
-                    .fill(Theme.handle)
-                    .frame(width: 22, height: 3)
-                    .padding(.bottom, 4)
+                .allowsHitTesting(false)
             }
-            .allowsHitTesting(false)
-        }
-        .highPriorityGesture(drag)
-        .accessibilityLabel("Resize duration")
+            .overlay {
+                DurationResizeBridge(
+                    enabled: chrome.drag == nil && !chrome.isResizing
+                        && (chrome.durationResize == nil || chrome.durationResize?.taskID == task.id),
+                    onBegan: beginIfNeeded,
+                    onChanged: { chrome.moveDurationResize(deltaY: $0) },
+                    onEnded: finishIfNeeded,
+                    onCancel: {
+                        swiftUIDrag = false
+                        chrome.cancelDurationResize()
+                    }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .highPriorityGesture(drag)
+            .accessibilityLabel("Resize duration")
     }
 
     private var drag: some Gesture {

@@ -61,6 +61,16 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertGreaterThan(top, 21 * 50)
     }
 
+    func testBlockContainsStopsComposerOnDurationEdge() {
+        let placed = CalendarLayout.placeTimed(
+            [event(time: "02:00", duration: 30)],
+            pixelsPerHour: 50
+        )
+        XCTAssertEqual(placed.count, 1)
+        XCTAssertTrue(CalendarLayout.blockContains(y: placed[0].y + 20, event: placed[0]))
+        XCTAssertFalse(CalendarLayout.blockContains(y: placed[0].y - 8, event: placed[0]))
+    }
+
     func testPreviewDurationMatchesWebPixelsPerHour() {
         // 50 px/hour → 1.2 minutes per point; +50pt adds 60 minutes.
         let preview = CalendarLayout.previewDuration(start: 30, deltaY: 50, pixelsPerHour: 50)

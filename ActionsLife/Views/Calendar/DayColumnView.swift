@@ -106,38 +106,26 @@ struct DayColumnView: View {
         ZStack(alignment: .topLeading) {
             hourGrid
             ForEach(placed) { event in
-                CalendarEventCard(
-                    task: event.task,
-                    children: store.children(of: event.task.id),
-                    onToggle: { store.toggleDone(event.task.id) },
-                    onOpen: { selectedTaskID = event.task.id },
-                    onToggleChild: { store.toggleDone($0) },
-                    onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) }
-                )
-                .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
-                .position(x: columnWidth / 2, y: event.y + max(event.height, 36) / 2)
-            }
-            Color.clear
-                .frame(width: columnWidth, height: canvasHeight)
-                .overlay(alignment: .topLeading) {
-                    ForEach(placed) { event in
-                        VStack(spacing: 0) {
-                            Color.clear
-                                .frame(height: max(0, durationHandleTop(for: event)))
-                                .allowsHitTesting(false)
-                            DurationEdgeHandle(
-                                task: event.task,
-                                onResize: { store.setDuration(event.task.id, minutes: $0) }
-                            )
-                            .frame(width: columnWidth - 12, height: HomeChrome.durationHandleHit)
-                            .padding(.leading, 6)
-                            Spacer(minLength: 0)
-                                .allowsHitTesting(false)
-                        }
-                        .frame(width: columnWidth, height: canvasHeight, alignment: .topLeading)
-                    }
+                VStack(spacing: 0) {
+                    Color.clear
+                        .frame(height: max(0, event.y))
+                        .allowsHitTesting(false)
+                    CalendarEventCard(
+                        task: event.task,
+                        children: store.children(of: event.task.id),
+                        onToggle: { store.toggleDone(event.task.id) },
+                        onOpen: { selectedTaskID = event.task.id },
+                        onToggleChild: { store.toggleDone($0) },
+                        onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) },
+                        onResizeDuration: { store.setDuration(event.task.id, minutes: $0) }
+                    )
+                    .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
+                    .padding(.leading, 6)
+                    Spacer(minLength: 0)
+                        .allowsHitTesting(false)
                 }
-                .zIndex(12)
+                .frame(width: columnWidth, height: canvasHeight, alignment: .topLeading)
+            }
             if let preview = chrome.timedPreview(for: dayISO) {
                 CalendarDropPreview(height: preview.height)
                     .padding(.horizontal, 6)
@@ -179,6 +167,10 @@ struct DayColumnView: View {
         .gesture(
             SpatialTapGesture().onEnded { event in
                 guard chrome.drag == nil, !chrome.isResizing, chrome.durationResize == nil else { return }
+                // Capsule pan on a block must not open the timed composer / keyboard.
+                if placed.contains(where: { CalendarLayout.blockContains(y: event.location.y, event: $0) }) {
+                    return
+                }
                 let minutes = CalendarLayout.minutes(
                     atY: event.location.y,
                     pixelsPerHour: pixelsPerHour,
@@ -213,22 +205,5 @@ struct DayColumnView: View {
         guard chrome.drag == nil, !chrome.isResizing, chrome.durationResize == nil else { return }
         composerText = ""
         calendarComposer = .allDay(dayISO: dayISO)
-    }
-
-    /// Keep the hit target on the start-duration edge so the gesture view does
-    /// not move while preview height changes.
-    private func durationHandleTop(for event: CalendarLayout.PlacedEvent) -> CGFloat {
-        let duration: Double
-        if let session = chrome.durationResize, session.taskID == event.task.id {
-            duration = session.startDuration
-        } else {
-            duration = event.task.duration
-        }
-        return CalendarLayout.durationHandleTop(
-            duration: duration,
-            y: event.y,
-            pixelsPerHour: pixelsPerHour,
-            handle: HomeChrome.durationHandleHit
-        )
     }
 }

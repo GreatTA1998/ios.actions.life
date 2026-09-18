@@ -578,7 +578,7 @@ struct DurationResizeBridge: UIViewRepresentable {
 
     final class DurationPanRecognizer: UIPanGestureRecognizer {
         override func canPrevent(_ other: UIGestureRecognizer) -> Bool {
-            other.view is UIScrollView || other is UIPanGestureRecognizer
+            true
         }
 
         override func canBePrevented(by other: UIGestureRecognizer) -> Bool {
@@ -594,6 +594,7 @@ struct DurationResizeBridge: UIViewRepresentable {
             backgroundColor = .clear
             isUserInteractionEnabled = true
             isMultipleTouchEnabled = false
+            isExclusiveTouch = true
         }
 
         override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
