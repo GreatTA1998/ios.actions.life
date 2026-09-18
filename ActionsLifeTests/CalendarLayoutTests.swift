@@ -35,6 +35,17 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(CalendarLayout.canvasHeight(pixelsPerHour: 50), 24 * 50)
     }
 
+    func testDropYMapsToSnappedClock() {
+        let minutes = CalendarLayout.minutes(atY: 10 * 50 + 20, pixelsPerHour: 50, snap: 15)
+        XCTAssertEqual(minutes, 10 * 60 + 15)
+        XCTAssertEqual(CalendarLayout.clock(fromMinutes: minutes), "10:15")
+    }
+
+    func testHourLabelsAreBareNumbers() {
+        XCTAssertEqual(CalendarLayout.hourLabel(9), "9")
+        XCTAssertEqual(CalendarLayout.hourLabel(0), "0")
+    }
+
     private func event(id: String = "timed", time: String, duration: Double) -> TaskSnapshot {
         TaskSnapshot(
             id: id,

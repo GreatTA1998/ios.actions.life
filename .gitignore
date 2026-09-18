@@ -3,5 +3,7 @@ xcuserdata/
 *.xcuserstate
 DerivedData/
 .build/
+build/
 *.ipa
 *.dSYM.zip
+*.xcarchive

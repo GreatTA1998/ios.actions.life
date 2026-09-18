@@ -4,98 +4,116 @@ struct DayCalendarView: View {
     @Bindable var store: TaskTreeStore
     @Binding var selectedDay: Date
     @Binding var selectedTaskID: String?
+    var columnWidth: CGFloat
+    var onJumpToday: () -> Void
+    var onMenu: () -> Void
 
+    @Environment(HomeChrome.self) private var chrome
     private let calendar = Calendar.current
+    @State private var scrollOffset: CGPoint = .zero
 
-    private var selectedISO: String { DateISO.dayString(from: selectedDay) }
-
-    private var scheduledTasks: [TaskSnapshot] {
-        store.allSnapshots
-            .filter { $0.startDateISO == selectedISO }
-            .sorted { lhs, rhs in
-                (lhs.startTime.isEmpty ? "99:99" : lhs.startTime)
-                    < (rhs.startTime.isEmpty ? "99:99" : rhs.startTime)
-            }
-    }
+    private var pixelsPerHour: Double { store.profile?.pixelsPerHour ?? 50 }
+    private var hourHeight: CGFloat { CalendarLayout.hourHeight(pixelsPerHour: pixelsPerHour) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            dayStrip
-            Divider().overlay(Theme.grid)
-            DayColumnView(
-                store: store,
-                day: selectedDay,
-                tasks: scheduledTasks,
-                pixelsPerHour: store.profile?.pixelsPerHour ?? 50,
-                selectedTaskID: $selectedTaskID
-            )
+        ZStack(alignment: .topLeading) {
+            calendarScroll
+            stickyTimeAxis
+            topChrome
+        }
+        .background(Theme.calendarBackground)
+        .scrollDisabled(chrome.isResizing)
+    }
+
+    private var calendarScroll: some View {
+        ScrollViewReader { proxy in
+            ScrollView([.horizontal, .vertical], showsIndicators: false) {
+                HStack(alignment: .top, spacing: 0) {
+                    Color.clear.frame(width: CalendarLayout.timeAxisWidth)
+                    ForEach(days, id: \.self) { day in
+                        DayColumnView(
+                            store: store,
+                            day: day,
+                            tasks: store.tasks(on: DateISO.dayString(from: day)),
+                            pixelsPerHour: pixelsPerHour,
+                            columnWidth: columnWidth,
+                            selectedTaskID: $selectedTaskID
+                        )
+                        .id(DateISO.dayString(from: day))
+                    }
+                }
+            }
+            .scrollDisabled(chrome.isResizing)
+            .modifier(ScrollOffsetTracker(offset: $scrollOffset))
+            .onAppear {
+                proxy.scrollTo(DateISO.dayString(from: selectedDay), anchor: .topLeading)
+            }
+            .onChange(of: selectedDay) { _, day in
+                proxy.scrollTo(DateISO.dayString(from: day), anchor: .topLeading)
+            }
         }
     }
 
-    private var dayStrip: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(selectedDay, format: .dateTime.month(.wide).year())
-                    .font(.headline)
-                    .foregroundStyle(Theme.ink)
-                Spacer()
-                Text(selectedDay, format: .dateTime.weekday(.wide).month(.abbreviated).day())
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.secondaryInk)
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(days, id: \.self) { day in
-                            let iso = DateISO.dayString(from: day)
-                            let count = store.allSnapshots.filter { $0.startDateISO == iso }.count
-                            Button {
-                                selectedDay = day
-                            } label: {
-                                VStack(spacing: 4) {
-                                    Text(day, format: .dateTime.weekday(.narrow))
-                                        .font(.caption2)
-                                    Text(day, format: .dateTime.day())
-                                        .font(.headline)
-                                    Circle()
-                                        .fill(count > 0 ? Theme.accent : Color.clear)
-                                        .frame(width: 5, height: 5)
-                                }
-                                .foregroundStyle(calendar.isDate(day, inSameDayAs: selectedDay) ? Color.white : Theme.ink)
-                                .frame(width: 44, height: 58)
-                                .background(
-                                    calendar.isDate(day, inSameDayAs: selectedDay) ? Theme.accent : Color.white.opacity(0.6),
-                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .id(iso)
-                            .dropDestination(for: String.self) { ids, _ in
-                                guard let id = ids.first else { return false }
-                                store.schedule(id, dayISO: iso)
-                                selectedDay = day
-                                return true
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                }
-                .onAppear {
-                    proxy.scrollTo(DateISO.dayString(from: selectedDay), anchor: .center)
-                }
-                .onChange(of: selectedDay) { _, day in
-                    proxy.scrollTo(DateISO.dayString(from: day), anchor: .center)
+    private var stickyTimeAxis: some View {
+        VStack(spacing: 0) {
+            Color.clear.frame(height: max(0, 44 - scrollOffset.y))
+            VStack(spacing: 0) {
+                ForEach(CalendarLayout.hours(), id: \.self) { hour in
+                    Text(CalendarLayout.hourLabel(hour))
+                        .font(.caption2)
+                        .foregroundStyle(Theme.secondaryInk)
+                        .frame(width: CalendarLayout.timeAxisWidth - 6, height: hourHeight, alignment: .topTrailing)
                 }
             }
-            .padding(.bottom, 8)
+            .offset(y: -max(0, scrollOffset.y - 44))
         }
+        .frame(width: CalendarLayout.timeAxisWidth, alignment: .top)
+        .clipped()
+        .allowsHitTesting(false)
+        .background(Theme.calendarBackground.opacity(0.92))
+    }
+
+    private var topChrome: some View {
+        HStack {
+            Button("Today", action: onJumpToday)
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.white.opacity(0.86), in: Capsule())
+                .overlay(Capsule().stroke(Theme.cardStroke, lineWidth: 1))
+            Spacer()
+            Button(action: onMenu) {
+                Image(systemName: "ellipsis")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                    .frame(width: 32, height: 32)
+                    .background(Color.white.opacity(0.86), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("More")
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
     }
 
     private var days: [Date] {
-        let start = calendar.date(byAdding: .day, value: -14, to: calendar.startOfDay(for: .now)) ?? .now
-        return (0..<29).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+        let start = calendar.date(byAdding: .day, value: -7, to: calendar.startOfDay(for: .now)) ?? .now
+        return (0..<21).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+    }
+}
+
+private struct ScrollOffsetTracker: ViewModifier {
+    @Binding var offset: CGPoint
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollGeometryChange(for: CGPoint.self) { geo in
+                geo.contentOffset
+            } action: { _, newValue in
+                offset = newValue
+            }
+        } else {
+            content
+        }
     }
 }

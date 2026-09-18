@@ -5,21 +5,22 @@ struct InboxView: View {
     @Binding var selectedTaskID: String?
     var onAddRoot: () -> Void
     var onAddChild: (String) -> Void
+    @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Inbox")
-                    .font(.headline)
-                    .foregroundStyle(Theme.ink)
                 Spacer()
                 Button(action: onAddRoot) {
                     Image(systemName: "plus")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
                 }
                 .accessibilityLabel("Add task")
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            .padding(.top, 4)
+            .padding(.bottom, 2)
 
             if store.inbox.isEmpty {
                 ContentUnavailableView {
@@ -46,8 +47,14 @@ struct InboxView: View {
                     .padding(.horizontal, 12)
                     .padding(.bottom, 28)
                 }
+                .scrollDisabled(chrome.isResizing)
             }
         }
         .background(Theme.listBackground)
+        .dropDestination(for: String.self) { ids, _ in
+            guard let id = ids.first else { return false }
+            store.clearSchedule(id)
+            return true
+        } isTargeted: { chrome.setDropTargeted($0) }
     }
 }

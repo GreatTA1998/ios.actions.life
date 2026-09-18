@@ -55,4 +55,26 @@ enum CalendarLayout {
         let hour = calendar.component(.hour, from: now)
         return min(max(hour - 1, startHour), max(endHour - 4, startHour))
     }
+
+    static func minutes(atY y: CGFloat, pixelsPerHour: Double, snap: Int = 15) -> Int {
+        let hourH = hourHeight(pixelsPerHour: pixelsPerHour)
+        let raw = Int((Double(y) / Double(hourH) * 60).rounded())
+        let step = max(snap, 1)
+        let clamped = min(max(raw, 0), endHour * 60 - step)
+        return (clamped / step) * step
+    }
+
+    static func clock(fromMinutes minutes: Int) -> String {
+        let bounded = min(max(minutes, 0), endHour * 60 - 1)
+        return String(format: "%02d:%02d", bounded / 60, bounded % 60)
+    }
+
+    static func hourLabel(_ hour: Int) -> String {
+        "\(hour)"
+    }
+
+    static func nowY(now: Date = .now, calendar: Calendar = .current, pixelsPerHour: Double) -> CGFloat {
+        let minutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+        return CGFloat(minutes) / 60 * hourHeight(pixelsPerHour: pixelsPerHour)
+    }
 }

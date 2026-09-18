@@ -6,6 +6,7 @@ struct TaskRowView: View {
     @Bindable var store: TaskTreeStore
     @Binding var selectedTaskID: String?
     var onAddChild: (String) -> Void
+    @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -53,10 +54,11 @@ struct TaskRowView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.vertical, 8)
+            .padding(.vertical, 6)
             .padding(.leading, CGFloat(depth) * 18)
             .contentShape(Rectangle())
             .draggable(tree.id)
+            .allowsHitTesting(!chrome.isResizing)
             .contextMenu {
                 Button("Open", systemImage: "doc.text") { selectedTaskID = tree.id }
                 Button("Add subtask", systemImage: "plus") { onAddChild(tree.id) }

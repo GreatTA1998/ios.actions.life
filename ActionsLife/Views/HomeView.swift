@@ -11,8 +11,10 @@ struct HomeView: View {
     @State private var selectedTaskID: String?
     @State private var composerText = ""
     @State private var showComposer = false
+    @State private var showMenu = false
     @State private var composerParentID = ""
     @State private var dragStartSplit: Double?
+    @State private var chrome = HomeChrome()
 
     var body: some View {
         NavigationStack {
@@ -20,23 +22,39 @@ struct HomeView: View {
                 if let store {
                     GeometryReader { geo in
                         let split = store.listHeightSplit
-                        let calendarHeight = max(220, geo.size.height * (1 - split))
+                        let calendarHeight = max(240, geo.size.height * (1 - split))
+                        let columnWidth = min(
+                            max(store.profile?.calColumnWidth ?? 220, 180),
+                            geo.size.width - CalendarLayout.timeAxisWidth - 20
+                        )
                         VStack(spacing: 0) {
                             DayCalendarView(
                                 store: store,
                                 selectedDay: $selectedDay,
-                                selectedTaskID: $selectedTaskID
+                                selectedTaskID: $selectedTaskID,
+                                columnWidth: columnWidth,
+                                onJumpToday: {
+                                    selectedDay = Calendar.current.startOfDay(for: .now)
+                                },
+                                onMenu: { showMenu = true }
                             )
                             .frame(height: calendarHeight)
-                            .background(Theme.calendarBackground)
 
                             SplitHandle(
+                                enabled: !chrome.isDropTargeted,
                                 onChanged: { translation in
                                     let start = dragStartSplit ?? store.listHeightSplit
-                                    if dragStartSplit == nil { dragStartSplit = start }
-                                    store.setListHeightSplit(start - translation / geo.size.height)
+                                    if dragStartSplit == nil {
+                                        dragStartSplit = start
+                                        chrome.isResizing = true
+                                    }
+                                    store.setListHeightSplitLive(start - translation / geo.size.height)
                                 },
-                                onEnded: { dragStartSplit = nil }
+                                onEnded: {
+                                    dragStartSplit = nil
+                                    chrome.isResizing = false
+                                    store.setListHeightSplit(store.listHeightSplit)
+                                }
                             )
 
                             InboxView(
@@ -49,10 +67,26 @@ struct HomeView: View {
                                 }
                             )
                             .frame(maxHeight: .infinity)
+                            .scrollDisabled(chrome.isResizing)
+                            .allowsHitTesting(!chrome.isResizing)
                         }
                     }
+                    .environment(chrome)
                     .sheet(item: selectedTaskBinding(store)) { record in
                         TaskDetailSheet(store: store, taskID: record.id)
+                    }
+                    .confirmationDialog("actions.life", isPresented: $showMenu, titleVisibility: .visible) {
+                        Button("Add task") {
+                            composerParentID = ""
+                            showComposer = true
+                        }
+                        Button("Jump to today") {
+                            selectedDay = Calendar.current.startOfDay(for: .now)
+                        }
+                        Button("Sign out", role: .destructive) {
+                            auth.signOut()
+                        }
+                        Button("Cancel", role: .cancel) {}
                     }
                     .onChange(of: store.lastScheduledISO) { _, iso in
                         guard let iso, let date = DateISO.date(fromDayISO: iso) else { return }
@@ -63,32 +97,7 @@ struct HomeView: View {
                 }
             }
             .background(Theme.listBackground.ignoresSafeArea())
-            .navigationTitle("Today")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Today") {
-                        selectedDay = Calendar.current.startOfDay(for: .now)
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button("Add task", systemImage: "plus") {
-                            composerParentID = ""
-                            showComposer = true
-                        }
-                        Button("Jump to today", systemImage: "calendar") {
-                            selectedDay = Calendar.current.startOfDay(for: .now)
-                        }
-                        Divider()
-                        Button("Sign out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
-                            auth.signOut()
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
             .alert("New task", isPresented: $showComposer) {
                 TextField("Task name", text: $composerText)
                 Button("Add") {
@@ -104,7 +113,7 @@ struct HomeView: View {
                     composerParentID = ""
                 }
             } message: {
-                Text(composerParentID.isEmpty ? "Added to the inbox." : "Nested under the selected task.")
+                Text(composerParentID.isEmpty ? "Added to the list." : "Nested under the selected task.")
             }
         }
         .onAppear {
@@ -132,25 +141,38 @@ private struct TaskIdentity: Identifiable {
 }
 
 private struct SplitHandle: View {
+    var enabled: Bool
     var onChanged: (CGFloat) -> Void
     var onEnded: () -> Void
 
     var body: some View {
+        ZStack {
+            Theme.navbarBackground
+            VStack(spacing: 3) {
+                capsule
+                capsule
+                capsule
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 36)
+        .contentShape(Rectangle())
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 2)
+                .onChanged { value in
+                    onChanged(value.translation.height)
+                }
+                .onEnded { _ in
+                    onEnded()
+                }
+        )
+        .allowsHitTesting(enabled)
+        .accessibilityLabel("Resize list")
+    }
+
+    private var capsule: some View {
         Capsule()
             .fill(Theme.handle)
-            .frame(width: 48, height: 5)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity)
-            .background(Theme.navbarBackground)
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        onChanged(value.translation.height)
-                    }
-                    .onEnded { _ in
-                        onEnded()
-                    }
-            )
-            .accessibilityLabel("Resize list")
+            .frame(width: 22, height: 1.5)
     }
 }

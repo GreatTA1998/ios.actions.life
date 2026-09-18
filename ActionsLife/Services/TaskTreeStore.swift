@@ -38,6 +38,12 @@ final class TaskTreeStore {
             }
     }
 
+    func children(of id: String) -> [TaskSnapshot] {
+        allSnapshots
+            .filter { $0.parentID == id }
+            .sorted { $0.orderValue < $1.orderValue }
+    }
+
     func task(id: String) -> TaskRecord? {
         fetchRecords().first { $0.id == id }
     }
@@ -213,6 +219,10 @@ final class TaskTreeStore {
             profile.updatedAt = .now
         }
         try? context.save()
+    }
+
+    func setListHeightSplitLive(_ value: Double) {
+        listHeightSplit = min(0.85, max(0.25, value))
     }
 
     func seedGuestDataIfNeeded() {

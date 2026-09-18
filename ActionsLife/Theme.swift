@@ -9,6 +9,9 @@ enum Theme {
     static let secondaryInk = Color(red: 107 / 255, green: 114 / 255, blue: 128 / 255)
     static let accent = Color(red: 90 / 255, green: 122 / 255, blue: 80 / 255)
     static let block = Color(red: 110 / 255, green: 142 / 255, blue: 96 / 255).opacity(0.55)
+    static let cardFill = Color.white.opacity(0.82)
+    static let cardStroke = Color.black.opacity(0.10)
+    static let now = Color(red: 214 / 255, green: 92 / 255, blue: 48 / 255)
     static let handle = Color.black.opacity(0.12)
 }
 
