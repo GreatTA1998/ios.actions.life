@@ -726,6 +726,54 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertNil(hit(CGPoint(x: 100, y: 4 * hourH + 10)))
     }
 
+    func testHitTestFindsCardPlacedAtBlockFrameOrigin() {
+        // `Layout.place` a card-sized child at blockFrame.origin. Parent
+        // height is the block bottom, not the canvas.
+        let hourH: CGFloat = 50
+        let placed = CalendarLayout.placeTimed(
+            [event(id: "pr3", time: "08:00", duration: 30)],
+            pixelsPerHour: 50
+        )[0]
+        let frame = CalendarLayout.blockFrame(event: placed, columnWidth: 220)
+        XCTAssertEqual(frame.minY, 8 * hourH, accuracy: 0.01)
+        XCTAssertEqual(frame.height, 36, accuracy: 0.01)
+        XCTAssertLessThan(frame.maxY, 24 * hourH - 8)
+
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 220, height: 400))
+        let canvas = UIView(frame: CGRect(x: 0, y: 0, width: 220, height: 24 * hourH))
+        scroll.addSubview(canvas)
+        scroll.contentSize = canvas.bounds.size
+        let grid = UIView(frame: canvas.bounds)
+        canvas.addSubview(grid)
+
+        let parent = UIView(frame: CGRect(x: 0, y: 0, width: frame.maxX, height: frame.maxY))
+        canvas.addSubview(parent)
+        let card = UIView(frame: frame)
+        card.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        parent.addSubview(card)
+        let capsule = UIView(frame: CGRect(x: 0, y: frame.height - 16, width: frame.width, height: 16))
+        capsule.accessibilityIdentifier = CalendarLayout.timedCapsuleAccessibilityID("pr3")
+        card.addSubview(capsule)
+        scroll.layoutIfNeeded()
+
+        XCTAssertFalse(CalendarLayout.isHourCanvasHost(card, scroll: scroll))
+        XCTAssertTrue(CalendarLayout.isPaintedCardSized(card, scroll: scroll))
+
+        func hit(_ canvasPoint: CGPoint) -> CalendarLayout.PaintedCardHit? {
+            let inScroll = canvas.convert(canvasPoint, to: scroll)
+            let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: inScroll)
+            return CalendarLayout.paintedCardHit(
+                from: view,
+                locationInScroll: inScroll,
+                in: scroll
+            )
+        }
+
+        XCTAssertEqual(hit(CGPoint(x: frame.midX, y: frame.minY + 8)), .blockBody(taskID: "pr3"))
+        XCTAssertEqual(hit(CGPoint(x: frame.midX, y: frame.maxY - 4)), .capsule(taskID: "pr3"))
+        XCTAssertNil(hit(CGPoint(x: 100, y: 4 * hourH + 10)))
+    }
+
     private func event(id: String = "timed", time: String, duration: Double) -> TaskSnapshot {
         TaskSnapshot(
             id: id,

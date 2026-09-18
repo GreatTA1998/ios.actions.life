@@ -106,14 +106,12 @@ struct DayColumnView: View {
         ZStack(alignment: .topLeading) {
             hourGrid
             ForEach(placed) { event in
-                // Spacer layout from `e2fba41`/`c7a355e` (Details passed). Do
-                // not use `Layout.place` / `.offset` / `.position` — those
-                // leave UIViewRepresentable hit targets at hour 0 while the
-                // card paints at event.y (`fde5616`).
-                VStack(alignment: .leading, spacing: 0) {
-                    Color.clear
-                        .frame(height: max(0, event.y))
-                        .allowsHitTesting(false)
+                // Place a **card-sized** child at `blockFrame.origin` so the
+                // UIView sits on the painted pixels. Spacer / padding / offset
+                // leave the UIView at hour 0 (`2098eca` hitTest missed). Do
+                // not wrap cards in a canvas-height `TimedCardLayout` (`adce52c`).
+                let frame = CalendarLayout.blockFrame(event: event, columnWidth: columnWidth)
+                BlockFrameCardLayout(frame: frame) {
                     CalendarEventCard(
                         task: event.task,
                         children: store.children(of: event.task.id),
@@ -122,10 +120,9 @@ struct DayColumnView: View {
                         onToggleChild: { store.toggleDone($0) },
                         onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) }
                     )
-                    .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
-                    .padding(.leading, 6)
+                    .frame(width: frame.width, height: frame.height, alignment: .top)
                 }
-                .frame(width: columnWidth, alignment: .topLeading)
+                .contentShape(Path(frame))
             }
             if let preview = chrome.timedPreview(for: dayISO) {
                 CalendarDropPreview(height: preview.height)
@@ -216,5 +213,26 @@ struct DayColumnView: View {
         guard chrome.drag == nil, !chrome.isResizing, chrome.durationResize == nil else { return }
         composerText = ""
         calendarComposer = .allDay(dayISO: dayISO)
+    }
+}
+
+/// Places one **card-sized** child at `blockFrame.origin`. Height is the
+/// block bottom, not the 24-hour canvas (`adce52c` host). Empty hours above
+/// the block are not a card; `hitTest` there stays timed create.
+private struct BlockFrameCardLayout: Layout {
+    var frame: CGRect
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
+        CGSize(width: frame.maxX, height: frame.maxY)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
+        for subview in subviews {
+            subview.place(
+                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: frame.width, height: frame.height)
+            )
+        }
     }
 }

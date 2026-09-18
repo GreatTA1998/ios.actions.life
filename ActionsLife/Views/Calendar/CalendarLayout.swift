@@ -69,10 +69,8 @@ enum CalendarLayout {
         y + blockFrameHeight(duration: duration, y: y, pixelsPerHour: pixelsPerHour) - handle
     }
 
-    /// Timed card in canvas space (6pt leading inset). DayColumnView lays
-    /// this out with a top spacer so the painted card matches `event.y`
-    /// (`e2fba41`/`c7a355e`). Duration pan hit-tests the 16pt capsule in
-    /// hour-scroller content space, not a card UIView.
+    /// Timed card in canvas space (6pt leading inset). `BlockFrameCardLayout`
+    /// places a card-sized child at this origin so `hitTest` matches paint.
     static func blockFrame(event: PlacedEvent, columnWidth: CGFloat, leading: CGFloat = 6) -> CGRect {
         CGRect(
             x: leading,
