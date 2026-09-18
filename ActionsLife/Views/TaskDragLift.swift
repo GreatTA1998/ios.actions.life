@@ -697,10 +697,18 @@ struct HourDurationPanBridge: UIViewRepresentable {
         func captureCapsule(from scroll: UIScrollView?, touch: UITouch) {
             beganWindowY = touch.location(in: touch.window ?? scroll).y
             trackedTouch = touch
+            // Same `calendar.timed.*` UIView Details taps (`28ee931`).
+            // Start only in its bottom 16pt, then follow this UITouch.
             if let scroll {
                 let location = touch.location(in: scroll)
-                let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: location)
-                if let taskID = CalendarLayout.taskID(fromPaintedView: view) {
+                if let card = CalendarLayout.paintedTimedCard(in: scroll, locationInScroll: location),
+                   CalendarLayout.touchHitsPaintedCapsule(
+                    locationInScroll: location,
+                    card: card,
+                    in: scroll
+                   ),
+                   let taskID = CalendarLayout.taskID(fromPaintedView: card)
+                {
                     capturedTaskID = taskID
                     capturedStartDuration = capsuleTarget(taskID: taskID).duration
                 }
@@ -710,6 +718,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 capturedStartDuration = hit.duration
             }
             if capturedTaskID != nil {
+                dragging = true
                 beginFollowing(touch)
             }
         }
@@ -732,6 +741,18 @@ struct HourDurationPanBridge: UIViewRepresentable {
             let link = CADisplayLink(target: self, selector: #selector(sampleTrackedTouch))
             link.add(to: .main, forMode: .common)
             followLink = link
+        }
+
+        /// The recognizer can die when the finger leaves the 16pt band
+        /// while the `UITouch` is still down (`28ee931` froze at 35 min).
+        func shouldKeepFollowing(_ touch: UITouch) -> Bool {
+            guard capturedTaskID != nil else { return false }
+            switch touch.phase {
+            case .began, .moved, .stationary:
+                return true
+            default:
+                return false
+            }
         }
 
         func stopFollowingTouch() {
@@ -850,6 +871,20 @@ struct HourDurationPanBridge: UIViewRepresentable {
             }
             if gestureRecognizer === pan {
                 if dragging { return true }
+                let location = touch.location(in: scroll)
+                if let card = CalendarLayout.paintedTimedCard(in: scroll, locationInScroll: location),
+                   CalendarLayout.touchHitsPaintedCapsule(
+                    locationInScroll: location,
+                    card: card,
+                    in: scroll
+                   ),
+                   let taskID = CalendarLayout.taskID(fromPaintedView: card)
+                {
+                    let target = capsuleTarget(taskID: taskID)
+                    pendingHit = target
+                    claimedTarget = target
+                    return true
+                }
                 if case .capsule(let target) = hit {
                     pendingHit = target
                     claimedTarget = target
@@ -943,10 +978,9 @@ struct HourDurationPanBridge: UIViewRepresentable {
             owner?.lockOffsets(from: scroll ?? view)
             owner?.captureCapsule(from: scroll, touch: touch)
             owner?.restoreLockedOffsets()
-            // Own the UITouch so delivery continues after it leaves the
-            // 16pt capsule (XCUITest then moves +80 pt below the card).
+            // Do not cancel the card's own touches (`cancelsTouchesInView`
+            // cancelled this session at the 16pt edge and froze 35 min).
             if owner?.capturedTaskID != nil {
-                cancelsTouchesInView = true
                 state = .began
             }
         }
@@ -985,9 +1019,16 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
-            // Still commit window Y — the finger may already be +80 pt
-            // when the 16pt handle cancels.
             let touch = owner?.trackedTouch ?? touches.first
+            // Recognizer cancelled at the handle edge; the finger may still
+            // be down. Keep sampling window Y → setDuration until the
+            // UITouch actually ends (`28ee931` committed 35 min here).
+            if let touch, owner?.shouldKeepFollowing(touch) == true {
+                owner?.followWindowY(windowY(of: touch), ended: false)
+                state = .cancelled
+                super.touchesCancelled(touches, with: event)
+                return
+            }
             if let touch, owner?.capturedTaskID != nil {
                 owner?.followWindowY(windowY(of: touch), ended: true)
             }
@@ -1004,7 +1045,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         override func canBePrevented(by other: UIGestureRecognizer) -> Bool {
-            owner?.dragging != true
+            owner?.dragging != true && owner?.capturedTaskID == nil
         }
 
         override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {

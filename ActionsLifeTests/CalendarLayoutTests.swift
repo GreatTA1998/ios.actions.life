@@ -894,13 +894,53 @@ final class CalendarLayoutTests: XCTestCase {
         let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
         coordinator.bindStoreWrites(from: bridge)
         coordinator.startWindowFollow(taskID: "pr3", startDuration: 30, beganWindowY: beganWindowY)
+        // Callback must fire during the 80 pt drag (`e728c7b` / `28ee931`
+        // never wrote setDuration for this event after the handle edge).
+        coordinator.followWindowY(beganWindowY + 20, ended: false)
+        XCTAssertEqual(live.count, 1)
+        XCTAssertEqual(live[0].0, "pr3")
         coordinator.followWindowY(movedWindowY, ended: false)
-        XCTAssertEqual(live.last?.0, "pr3")
+        XCTAssertEqual(live.count, 2)
         XCTAssertEqual(live.last?.1 ?? 0, minutes, accuracy: 0.01)
         XCTAssertGreaterThan(live.last?.1 ?? 0, 35)
+        XCTAssertGreaterThan(live[1].1, live[0].1)
         coordinator.followWindowY(movedWindowY, ended: true)
         XCTAssertEqual(commits.last?.0, "pr3")
         XCTAssertEqual(commits.last?.1, CalendarLayout.snapDuration(minutes, snap: 15))
+    }
+
+    func testDurationStartsOnPaintedTimedCardBottomSixteenPoints() {
+        // `28ee931` Other card bottom 16pt `(134.0, 340.0)` must bind the
+        // same `calendar.timed.*` UIView Details uses — not a leaf overlay.
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        scroll.contentSize = CGSize(width: 390, height: 1200)
+        let card = UIView(frame: CGRect(x: 50, y: 315.3, width: 168, height: 39.3))
+        card.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("2860CA86")
+        scroll.addSubview(card)
+        let title = UIView(frame: CGRect(x: 37.3, y: 4, width: 122.7, height: 18))
+        title.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("2860CA86")
+        card.addSubview(title)
+        scroll.layoutIfNeeded()
+
+        let capsulePoint = CGPoint(x: 134, y: 340)
+        let found = CalendarLayout.paintedTimedCard(in: scroll, locationInScroll: capsulePoint)
+        XCTAssertTrue(found === card)
+        XCTAssertEqual(CalendarLayout.taskID(fromPaintedView: found), "2860CA86")
+        XCTAssertTrue(
+            CalendarLayout.touchHitsPaintedCapsule(
+                locationInScroll: capsulePoint,
+                card: card,
+                in: scroll
+            )
+        )
+        XCTAssertFalse(
+            CalendarLayout.touchHitsPaintedCapsule(
+                locationInScroll: CGPoint(x: 87.3 + 61, y: 319.3 + 9),
+                card: card,
+                in: scroll
+            ),
+            "StaticText title must stay Details"
+        )
     }
 
     func testCapsulePanTranslationGrowsBlockPastThirtyMinutes() {

@@ -514,6 +514,33 @@ enum CalendarLayout {
         return true
     }
 
+    /// The painted `calendar.timed.*` card UIView under a scroller point.
+    /// Does not use `hitTest` (the 16pt capsule overlay is not this view).
+    /// Title / empty-hour dispatch still uses `paintedCardHit` / `hourCanvasHit`.
+    static func paintedTimedCard(in scroll: UIScrollView, locationInScroll: CGPoint) -> UIView? {
+        var match: UIView?
+        var stack: [UIView] = [scroll]
+        while let view = stack.popLast() {
+            if view !== scroll,
+               let id = view.accessibilityIdentifier,
+               id.hasPrefix(timedCardAccessibilityPrefix),
+               !isHourCanvasHost(view, scroll: scroll),
+               isPaintedCardSized(view, scroll: scroll)
+            {
+                let local = scroll.convert(locationInScroll, to: view)
+                if view.bounds.insetBy(dx: -1, dy: -1).contains(local) {
+                    // Prefer the card (~39pt), not the StaticText title
+                    // (`28ee931` `(87.3, 319.3, 122.7, 18)` is Details).
+                    if match == nil || view.bounds.height > match!.bounds.height {
+                        match = view
+                    }
+                }
+            }
+            stack.append(contentsOf: view.subviews)
+        }
+        return match
+    }
+
     /// Bottom 16pt of the painted card in the scroller's space (`94e965c`
     /// a11y card `(50, 280.3, 168, 39.3)` → capsule y≈303.6–319.6).
     static func paintedCapsuleBand(of card: UIView, in scroll: UIScrollView) -> CGRect {
