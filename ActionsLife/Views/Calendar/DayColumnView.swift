@@ -105,24 +105,27 @@ struct DayColumnView: View {
     private var timedCanvas: some View {
         ZStack(alignment: .topLeading) {
             hourGrid
-            ForEach(placed) { event in
-                // Layout-space top padding — not `.offset` / `.position` (those
-                // leave the hit target at y=0 while the card paints at event.y).
-                // No canvas-height wrapper (that stole empty-hour SpatialTap).
-                CalendarEventCard(
-                    task: event.task,
-                    children: store.children(of: event.task.id),
-                    onToggle: { store.toggleDone(event.task.id) },
-                    onOpen: { selectedTaskID = event.task.id },
-                    onToggleChild: { store.toggleDone($0) },
-                    onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) },
-                    onResizeDuration: { store.setDuration(event.task.id, minutes: $0) }
-                )
-                .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
-                .contentShape(Rectangle())
-                .padding(.leading, 6)
-                .padding(.top, max(0, event.y))
+            // `Layout.place` sets each card's UIView frame to the painted
+            // pixels. `.offset` / `.position` leave the hit target at y=0;
+            // top padding / Color.clear spacers expand a host from hour 0
+            // (`fb395c3` HandleView was not under the capsule).
+            TimedCardLayout(items: placed, columnWidth: columnWidth) {
+                ForEach(placed) { event in
+                    CalendarEventCard(
+                        task: event.task,
+                        children: store.children(of: event.task.id),
+                        onToggle: { store.toggleDone(event.task.id) },
+                        onOpen: { selectedTaskID = event.task.id },
+                        onToggleChild: { store.toggleDone($0) },
+                        onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) },
+                        onResizeDuration: { store.setDuration(event.task.id, minutes: $0) }
+                    )
+                    .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
+                    .contentShape(Rectangle())
+                }
             }
+            .frame(width: columnWidth, height: canvasHeight, alignment: .topLeading)
+            .contentShape(TimedCardHitShape(items: placed, columnWidth: columnWidth))
             if let preview = chrome.timedPreview(for: dayISO) {
                 CalendarDropPreview(height: preview.height)
                     .padding(.horizontal, 6)
@@ -205,5 +208,44 @@ struct DayColumnView: View {
         guard chrome.drag == nil, !chrome.isResizing, chrome.durationResize == nil else { return }
         composerText = ""
         calendarComposer = .allDay(dayISO: dayISO)
+    }
+}
+
+/// Places timed cards at their canvas origin so drawing and hit-testing share
+/// one frame. Empty space is not a child, so hour-grid SpatialTap still
+/// creates on empty hours.
+private struct TimedCardLayout: Layout {
+    var items: [CalendarLayout.PlacedEvent]
+    var columnWidth: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
+        CGSize(width: proposal.width ?? columnWidth, height: proposal.height ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
+        for (subview, event) in zip(subviews, items) {
+            let frame = CalendarLayout.blockFrame(event: event, columnWidth: columnWidth)
+            subview.place(
+                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: frame.width, height: frame.height)
+            )
+        }
+    }
+}
+
+/// Hit-test shape is the painted cards only. A full-canvas `contentShape`
+/// would steal empty-hour SpatialTap (`d94cb61`).
+private struct TimedCardHitShape: Shape {
+    var items: [CalendarLayout.PlacedEvent]
+    var columnWidth: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        for event in items {
+            let frame = CalendarLayout.blockFrame(event: event, columnWidth: columnWidth)
+            path.addRect(frame.offsetBy(dx: rect.minX, dy: rect.minY))
+        }
+        return path
     }
 }

@@ -532,6 +532,181 @@ struct HourScrollTouchBridge: UIViewRepresentable {
     }
 }
 
+/// UIKit pan on the **16pt capsule UIView**. SwiftUI `DragGesture` never
+/// received `onChanged` inside the hour scroller (`c7a355e`). `require(toFail:)`
+/// only works if this view's frame is the painted capsule (`fb395c3` overlay
+/// left the UIView behind). `sizeThatFits` locks height at 16pt so the
+/// representable cannot expand over the title. Never `isScrollEnabled = false`
+/// on touch-down.
+struct DurationHandleBridge: UIViewRepresentable {
+    var enabled: Bool
+    var onBegan: () -> Void
+    var onChanged: (_ translationY: CGFloat) -> Void
+    var onEnded: () -> Void
+    var onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIView(context: Context) -> HandleView {
+        let view = HandleView()
+        view.coordinator = context.coordinator
+        context.coordinator.attach(to: view)
+        return view
+    }
+
+    func updateUIView(_ uiView: HandleView, context: Context) {
+        context.coordinator.parent = self
+        uiView.coordinator = context.coordinator
+        if !context.coordinator.dragging {
+            context.coordinator.pan.isEnabled = enabled
+        }
+        context.coordinator.wireHourScroller(from: uiView)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: HandleView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? uiView.bounds.width, height: HomeChrome.durationCapsuleHit)
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: DurationHandleBridge
+        let pan = UIPanGestureRecognizer()
+        private(set) var dragging = false
+        private var wireToken = 0
+
+        init(parent: DurationHandleBridge) {
+            self.parent = parent
+            super.init()
+            pan.addTarget(self, action: #selector(handlePan(_:)))
+            pan.delegate = self
+            pan.cancelsTouchesInView = false
+            pan.maximumNumberOfTouches = 1
+        }
+
+        deinit {
+            pan.view?.removeGestureRecognizer(pan)
+        }
+
+        func attach(to view: HandleView) {
+            guard pan.view !== view else { return }
+            pan.view?.removeGestureRecognizer(pan)
+            view.addGestureRecognizer(pan)
+        }
+
+        func wireHourScroller(from view: UIView) {
+            if let scroll = nearestHourScroller(from: view) {
+                apply(on: scroll)
+                return
+            }
+            wireToken += 1
+            let token = wireToken
+            DispatchQueue.main.async { [weak self, weak view] in
+                guard let self, let view, token == self.wireToken else { return }
+                self.retryWire(from: view, token: token, remaining: 24)
+            }
+        }
+
+        private func retryWire(from view: UIView, token: Int, remaining: Int) {
+            guard token == wireToken else { return }
+            if let scroll = nearestHourScroller(from: view) {
+                apply(on: scroll)
+                return
+            }
+            guard remaining > 0 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self, weak view] in
+                guard let self, let view else { return }
+                self.retryWire(from: view, token: token, remaining: remaining - 1)
+            }
+        }
+
+        private func apply(on scroll: UIScrollView) {
+            scroll.panGestureRecognizer.require(toFail: pan)
+            scroll.delaysContentTouches = false
+            scroll.canCancelContentTouches = false
+        }
+
+        private func nearestHourScroller(from view: UIView) -> UIScrollView? {
+            var current: UIView? = view.superview
+            while let node = current {
+                if let scroll = node as? UIScrollView,
+                   scroll.bounds.height > 0,
+                   scroll.contentSize.height > scroll.bounds.height + 1
+                {
+                    return scroll
+                }
+                current = node.superview
+            }
+            return nil
+        }
+
+        @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
+            let deltaY = gesture.translation(in: nil).y
+            switch gesture.state {
+            case .began:
+                dragging = true
+                parent.onBegan()
+                parent.onChanged(deltaY)
+            case .changed:
+                guard dragging else { return }
+                parent.onChanged(deltaY)
+            case .ended:
+                guard dragging else { return }
+                dragging = false
+                parent.onChanged(deltaY)
+                parent.onEnded()
+            case .cancelled, .failed:
+                let wasDragging = dragging
+                dragging = false
+                if wasDragging {
+                    parent.onCancel()
+                }
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            parent.enabled
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+        ) -> Bool {
+            false
+        }
+    }
+
+    final class HandleView: UIView {
+        weak var coordinator: Coordinator?
+
+        override var intrinsicContentSize: CGSize {
+            CGSize(width: UIView.noIntrinsicMetric, height: HomeChrome.durationCapsuleHit)
+        }
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            backgroundColor = UIColor.black.withAlphaComponent(0.001)
+            isUserInteractionEnabled = true
+            isAccessibilityElement = false
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { nil }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            coordinator?.wireHourScroller(from: self)
+        }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            coordinator?.wireHourScroller(from: self)
+        }
+    }
+}
+
 /// Pins ancestor `UIScrollView` contentOffsets once a duration drag
 /// is **active**. Never sets `isScrollEnabled = false` on touch-down
 /// (`a0da6ed` cancelled the pan). Does not flip `pointerCaptured` /

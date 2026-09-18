@@ -12,6 +12,46 @@ struct CalendarEventCard: View {
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            cardBody
+                .padding(.horizontal, 8)
+                .padding(.vertical, compact ? 6 : 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard !compact, chrome.durationResize == nil, chrome.drag == nil else { return }
+                    onOpen()
+                }
+
+            if !compact {
+                DurationEdgeHandle(
+                    task: task,
+                    onResize: onResizeDuration
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: HomeChrome.durationCapsuleHit)
+            }
+        }
+        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Theme.cardStroke, lineWidth: 1)
+        }
+        .opacity(task.isDone ? 0.55 : 1)
+        .overlay {
+            if chrome.showsNestPreview(for: task.id) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(
+                        Theme.dragPreview.opacity(0.6),
+                        style: StrokeStyle(lineWidth: 1, dash: [5, 4])
+                    )
+            }
+        }
+        .background { DropZoneReporter(kind: .nest(task.id)) }
+        .taskDragLift(id: task.id, name: task.name, duration: task.duration, fromCalendar: true, onDrop: onDrop)
+    }
+
+    private var cardBody: some View {
         VStack(alignment: .leading, spacing: compact ? 0 : 4) {
             HStack(alignment: .center, spacing: 6) {
                 Button(action: onToggle) {
@@ -71,91 +111,46 @@ struct CalendarEventCard: View {
                 }
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, compact ? 6 : 8)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Theme.cardStroke, lineWidth: 1)
-        }
-        .opacity(task.isDone ? 0.55 : 1)
-        .overlay {
-            if chrome.showsNestPreview(for: task.id) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(
-                        Theme.dragPreview.opacity(0.6),
-                        style: StrokeStyle(lineWidth: 1, dash: [5, 4])
-                    )
-            }
-        }
-        .background { DropZoneReporter(kind: .nest(task.id)) }
-        .taskDragLift(id: task.id, name: task.name, duration: task.duration, fromCalendar: true, onDrop: onDrop)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard !compact, chrome.durationResize == nil, chrome.drag == nil else { return }
-            onOpen()
-        }
-        .overlay(alignment: .bottom) {
-            if !compact {
-                DurationEdgeHandle(
-                    task: task,
-                    onResize: onResizeDuration
-                )
-                .frame(maxWidth: .infinity)
-                .frame(height: HomeChrome.durationCapsuleHit)
-            }
-        }
     }
 }
 
-/// 16pt painted capsule in the same layout as the card (padding, not offset).
-/// SwiftUI `DragGesture` sits on this SwiftUI view so hit-testing matches
-/// pixels. The hour scroller is configured not to cancel subview touches
-/// (`HourScrollTouchBridge`). Pin `contentOffset` only after the drag begins.
-/// Title / card-body taps still open Details — do not enlarge this band.
+/// 16pt layout slot at the bottom of the timed card — not an overlay, so the
+/// hosting UIView sits on the painted capsule. UIKit pan lives on that view;
+/// the hour scroller must fail it. Title taps still open Details.
 struct DurationEdgeHandle: View {
     let task: TaskSnapshot
     var onResize: (Double) -> Void
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
-        Color.primary.opacity(0.001)
-            .frame(maxWidth: .infinity)
-            .frame(height: HomeChrome.durationCapsuleHit)
-            .contentShape(Rectangle())
-            .overlay(alignment: .bottom) {
-                VStack(spacing: 4) {
-                    if chrome.durationResize?.taskID == task.id {
-                        Rectangle()
-                            .fill(Theme.dragPreview.opacity(0.85))
-                            .frame(height: 1)
-                    }
-                    Capsule()
-                        .fill(Theme.handle)
-                        .frame(width: 22, height: 3)
-                        .padding(.bottom, 4)
+        DurationHandleBridge(
+            enabled: chrome.drag == nil && !chrome.isResizing
+                && (chrome.durationResize == nil || chrome.durationResize?.taskID == task.id),
+            onBegan: beginIfNeeded,
+            onChanged: { chrome.moveDurationResize(deltaY: $0) },
+            onEnded: finishIfNeeded,
+            onCancel: { chrome.cancelDurationResize() }
+        )
+        .frame(maxWidth: .infinity)
+        .frame(height: HomeChrome.durationCapsuleHit)
+        .overlay(alignment: .bottom) {
+            VStack(spacing: 4) {
+                if chrome.durationResize?.taskID == task.id {
+                    Rectangle()
+                        .fill(Theme.dragPreview.opacity(0.85))
+                        .frame(height: 1)
                 }
-                .allowsHitTesting(false)
+                Capsule()
+                    .fill(Theme.handle)
+                    .frame(width: 22, height: 3)
+                    .padding(.bottom, 4)
             }
-            .highPriorityGesture(durationDrag)
-            .background {
-                ScrollOffsetLockBridge(locked: chrome.durationResize?.taskID == task.id)
-            }
-            .accessibilityLabel("Resize duration")
-    }
-
-    private var durationDrag: some Gesture {
-        DragGesture(minimumDistance: 1)
-            .onChanged { value in
-                guard chrome.drag == nil, !chrome.isResizing else { return }
-                beginIfNeeded()
-                chrome.moveDurationResize(deltaY: value.translation.height)
-            }
-            .onEnded { value in
-                chrome.moveDurationResize(deltaY: value.translation.height)
-                finishIfNeeded()
-            }
+            .allowsHitTesting(false)
+        }
+        .background {
+            ScrollOffsetLockBridge(locked: chrome.durationResize?.taskID == task.id)
+        }
+        .accessibilityLabel("Resize duration")
     }
 
     private func beginIfNeeded() {

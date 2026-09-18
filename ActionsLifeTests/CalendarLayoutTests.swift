@@ -155,6 +155,34 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(swiftUI.y, 270, accuracy: 0.01)
     }
 
+    func testBlockFrameOriginMatchesPaintedCard() {
+        // TimedCardLayout places at this origin — not offset/position/padding.
+        let placed = CalendarLayout.placeTimed(
+            [event(time: "05:00", duration: 30)],
+            pixelsPerHour: 50
+        )[0]
+        let frame = CalendarLayout.blockFrame(event: placed, columnWidth: 220)
+        XCTAssertEqual(frame.minX, 6, accuracy: 0.01)
+        XCTAssertEqual(frame.minY, 5 * 50, accuracy: 0.01)
+        XCTAssertEqual(frame.height, 36, accuracy: 0.01)
+        XCTAssertEqual(frame.width, 208, accuracy: 0.01)
+        let capsule = CalendarLayout.durationCapsuleRect(
+            columnIndex: 0,
+            columnWidth: 220,
+            event: placed
+        )
+        XCTAssertEqual(capsule.minY, frame.maxY - 16, accuracy: 0.01)
+        XCTAssertEqual(capsule.maxY, frame.maxY, accuracy: 0.01)
+        XCTAssertEqual(capsule.height, HomeChrome.durationCapsuleHit, accuracy: 0.01)
+        XCTAssertFalse(
+            CalendarLayout.touchHitsCapsule(
+                CGPoint(x: frame.midX, y: frame.minY + 8),
+                capsule: capsule
+            ),
+            "title / card body must still open Details"
+        )
+    }
+
     func testDurationCapsuleRectIsBottomBandInContentSpace() {
         let placed = CalendarLayout.placeTimed(
             [event(time: "03:00", duration: 30)],
