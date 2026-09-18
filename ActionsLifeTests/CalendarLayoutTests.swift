@@ -156,7 +156,7 @@ final class CalendarLayoutTests: XCTestCase {
     }
 
     func testBlockFrameOriginMatchesPaintedCard() {
-        // TimedCardLayout places at this origin — not offset/position/padding.
+        // Spacer layout places the card at this origin (`e2fba41`/`c7a355e`).
         let placed = CalendarLayout.placeTimed(
             [event(time: "05:00", duration: 30)],
             pixelsPerHour: 50

@@ -461,10 +461,10 @@ struct HoldThenDragBridge: UIViewRepresentable {
     }
 }
 
-/// Hour `UIScrollView` otherwise cancels subview pans, so a SwiftUI
-/// `DragGesture` on the painted capsule never `onChanged`. Do **not** set
-/// `isScrollEnabled = false` on touch-down. `hitTest` is nil — this view is
-/// not in the hit path.
+/// Hour `UIScrollView` otherwise delays subview touches. Do **not** set
+/// `canCancelContentTouches = false` globally — that cancelled hour scroll
+/// without the capsule UIView under the finger (`fde5616`). Do **not** set
+/// `isScrollEnabled = false` on touch-down. `hitTest` is nil.
 struct HourScrollTouchBridge: UIViewRepresentable {
     func makeUIView(context: Context) -> BridgeView {
         let view = BridgeView()
@@ -518,7 +518,6 @@ struct HourScrollTouchBridge: UIViewRepresentable {
                    scroll.contentSize.height > scroll.bounds.height + 1
                 {
                     scroll.delaysContentTouches = false
-                    scroll.canCancelContentTouches = false
                     return true
                 }
                 current = node.superview
@@ -532,65 +531,10 @@ struct HourScrollTouchBridge: UIViewRepresentable {
     }
 }
 
-/// UIControl filling the timed-card body (above the 16pt capsule). A 0×0
-/// `UIView` + `UITapGestureRecognizer` was not the hit target (`8225bf8`);
-/// SpatialTap still opened the composer. `.touchUpInside` opens Details.
-struct CardBodyTapBridge: UIViewRepresentable {
-    var onTap: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onTap: onTap)
-    }
-
-    func makeUIView(context: Context) -> TapView {
-        let view = TapView()
-        view.coordinator = context.coordinator
-        view.setContentHuggingPriority(.defaultLow, for: .vertical)
-        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        return view
-    }
-
-    func updateUIView(_ uiView: TapView, context: Context) {
-        context.coordinator.onTap = onTap
-        uiView.coordinator = context.coordinator
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: TapView, context: Context) -> CGSize? {
-        let size = proposal.replacingUnspecifiedDimensions()
-        return CGSize(width: max(size.width, 0), height: max(size.height, 0))
-    }
-
-    final class Coordinator {
-        var onTap: () -> Void
-        init(onTap: @escaping () -> Void) {
-            self.onTap = onTap
-        }
-    }
-
-    final class TapView: UIControl {
-        var coordinator: Coordinator?
-
-        override init(frame: CGRect) {
-            super.init(frame: frame)
-            backgroundColor = UIColor.black.withAlphaComponent(0.001)
-            isUserInteractionEnabled = true
-            isAccessibilityElement = false
-            addTarget(self, action: #selector(tapped), for: .touchUpInside)
-        }
-
-        @available(*, unavailable)
-        required init?(coder: NSCoder) { nil }
-
-        @objc func tapped() {
-            coordinator?.onTap()
-        }
-    }
-}
-
-/// 16pt capsule `UIControl`. Hit-testing eats the hour scroller (`8225bf8`)
-/// but `UIView.touchesMoved` never ran. Control tracking + window finger-Y
-/// commit `setDuration` on lift. Pan still `require(toFail:)`s the scroller.
-/// Never `isScrollEnabled = false` on touch-down.
+/// 16pt capsule UIView in the card's layout (painted bottom, not a 0×0
+/// overlay). Same drag → `setDuration` commit. `canCancelContentTouches`
+/// is false only while this handle is tracking. Never `isScrollEnabled =
+/// false` on touch-down.
 struct DurationHandleBridge: UIViewRepresentable {
     var enabled: Bool
     var startDuration: Double
@@ -636,6 +580,7 @@ struct DurationHandleBridge: UIViewRepresentable {
         private var pixelsPerHour: Double = 50
         private var snap: Int = 15
         private var wireToken = 0
+        private weak var hourScroll: UIScrollView?
 
         init(parent: DurationHandleBridge) {
             self.parent = parent
@@ -664,6 +609,7 @@ struct DurationHandleBridge: UIViewRepresentable {
             startDuration = parent.startDuration
             pixelsPerHour = parent.pixelsPerHour
             snap = parent.snap
+            hourScroll?.canCancelContentTouches = false
             parent.onBegan()
         }
 
@@ -676,6 +622,7 @@ struct DurationHandleBridge: UIViewRepresentable {
         func noteEnded() {
             guard dragging else { return }
             dragging = false
+            hourScroll?.canCancelContentTouches = true
             parent.onChanged(lastDelta)
             let minutes = CalendarLayout.snapDuration(
                 CalendarLayout.previewDuration(
@@ -694,6 +641,7 @@ struct DurationHandleBridge: UIViewRepresentable {
                 noteEnded()
             } else {
                 dragging = false
+                hourScroll?.canCancelContentTouches = true
                 parent.onCancel()
             }
         }
@@ -725,9 +673,12 @@ struct DurationHandleBridge: UIViewRepresentable {
         }
 
         private func apply(on scroll: UIScrollView) {
+            hourScroll = scroll
             scroll.panGestureRecognizer.require(toFail: pan)
             scroll.delaysContentTouches = false
-            scroll.canCancelContentTouches = false
+            if !dragging {
+                scroll.canCancelContentTouches = true
+            }
         }
 
         private func nearestHourScroller(from view: UIView) -> UIScrollView? {

@@ -12,13 +12,25 @@ struct CalendarEventCard: View {
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
-        Group {
-            if compact {
-                cardBody
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-            } else {
-                timedLayout
+        VStack(alignment: .leading, spacing: 0) {
+            cardBody
+                .padding(.horizontal, 8)
+                .padding(.vertical, compact ? 6 : 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    // Same card-body tap that passed Details on `e2fba41`/`c7a355e`.
+                    guard !compact, chrome.durationResize == nil, chrome.drag == nil else { return }
+                    onOpen()
+                }
+
+            if !compact {
+                DurationEdgeHandle(
+                    task: task,
+                    onResize: onResizeDuration
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: HomeChrome.durationCapsuleHit)
             }
         }
         .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -38,32 +50,6 @@ struct CalendarEventCard: View {
         }
         .background { DropZoneReporter(kind: .nest(task.id)) }
         .taskDragLift(id: task.id, name: task.name, duration: task.duration, fromCalendar: true, onDrop: onDrop)
-    }
-
-    /// Body UIControl fills the slot above the 16pt capsule (not a 0×0
-    /// ZStack sibling). Painted title overlays it; taps hit the control.
-    private var timedLayout: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            CardBodyTapBridge {
-                guard chrome.durationResize == nil, chrome.drag == nil else { return }
-                onOpen()
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay(alignment: .topLeading) {
-                cardBody
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .allowsHitTesting(false)
-            }
-
-            DurationEdgeHandle(
-                task: task,
-                onResize: onResizeDuration
-            )
-            .frame(maxWidth: .infinity)
-            .frame(height: HomeChrome.durationCapsuleHit)
-        }
     }
 
     private var cardBody: some View {
@@ -129,8 +115,8 @@ struct CalendarEventCard: View {
     }
 }
 
-/// 16pt layout slot at the bottom of the timed card. `UIControl` tracking
-/// commits window finger-Y into `setDuration` (`touchesMoved` never ran).
+/// 16pt layout slot at the painted bottom of the timed card (not an overlay
+/// representable at hour 0). Same drag → `setDuration` commit as `fde5616`.
 struct DurationEdgeHandle: View {
     let task: TaskSnapshot
     var onResize: (Double) -> Void
