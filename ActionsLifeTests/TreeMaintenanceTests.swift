@@ -2,6 +2,37 @@ import XCTest
 @testable import ActionsLife
 
 final class TreeMaintenanceTests: XCTestCase {
+    func testOrderValueMatchesWebComputeOrderValue() {
+        let rooms = [
+            snap("a", parent: "", order: 10),
+            snap("b", parent: "", order: 20),
+            snap("c", parent: "", order: 30)
+        ]
+        XCTAssertEqual(TreeMaintenance.orderValue(insertingAt: 0, among: rooms), 10 / 1.1, accuracy: 0.0001)
+        XCTAssertEqual(TreeMaintenance.orderValue(insertingAt: 3, among: rooms), 31, accuracy: 0.0001)
+        XCTAssertEqual(TreeMaintenance.orderValue(insertingAt: 1, among: rooms), 15, accuracy: 0.0001)
+        XCTAssertEqual(TreeMaintenance.orderValue(insertingAt: 0, among: []), 1, accuracy: 0.0001)
+    }
+
+    func testPlaceOnListReordersAndOptionallyUnschedules() {
+        var docs = [
+            snap("root", parent: "", root: "root", date: "2026-09-18", order: 1, treeISOs: ["2026-09-18"]),
+            snap("child", parent: "root", root: "root", date: "2026-09-18", order: 2, treeISOs: ["2026-09-18"])
+        ]
+        TreeMaintenance.applyPlaceOnList(
+            taskID: "child",
+            parentID: "",
+            orderValue: 0.5,
+            unschedule: true,
+            docs: &docs
+        )
+        let moved = docs.first { $0.id == "child" }
+        XCTAssertEqual(moved?.parentID, "")
+        XCTAssertEqual(moved?.orderValue, 0.5)
+        XCTAssertEqual(moved?.startDateISO, "")
+        XCTAssertEqual(moved?.startTime, "")
+    }
+
     func testBuildForestNestsByParentAndOrder() {
         let docs = [
             snap("root", parent: "", order: 2, name: "Later"),
