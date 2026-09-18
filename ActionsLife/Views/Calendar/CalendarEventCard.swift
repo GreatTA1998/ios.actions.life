@@ -107,8 +107,7 @@ struct CalendarEventCard: View {
 }
 
 /// Painted capsule on the card. Pan lives on the hour scroller and is gated by
-/// the capsule rect in **scroll content** coordinates (not GeometryReader
-/// global — that frame lagged the visible card). Card-body taps open Details.
+/// this overlay's UIKit frame (and content-space math). Card-body taps open Details.
 struct DurationEdgeHandle: View {
     let task: TaskSnapshot
     var onResize: (Double) -> Void

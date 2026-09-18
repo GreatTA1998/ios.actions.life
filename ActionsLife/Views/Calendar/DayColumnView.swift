@@ -108,8 +108,8 @@ struct DayColumnView: View {
             hourGrid
             ForEach(placed) { event in
                 // Spacer above the card only — never a canvas-height fill (that
-                // put capsules on empty hours). The duration pan is attached to
-                // the hour scroller and hit-tested in content coordinates.
+                // put capsules on empty hours). Duration pan is on the hour
+                // scroller; shouldReceive uses the handle UIView + content math.
                 VStack(alignment: .leading, spacing: 0) {
                     Color.clear
                         .frame(height: max(0, event.y))

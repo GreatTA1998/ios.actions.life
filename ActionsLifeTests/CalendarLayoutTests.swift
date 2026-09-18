@@ -112,6 +112,30 @@ final class CalendarLayoutTests: XCTestCase {
         )
     }
 
+    func testDurationHandleWindowRectIsBottomBandNotCardBody() {
+        let card = CGRect(x: 40, y: 200, width: 200, height: 36)
+        let handle = CalendarLayout.durationHandleWindowRect(
+            handleInWindow: .zero,
+            hostInWindow: card,
+            handleHeight: 16
+        )
+        XCTAssertEqual(handle.height, 16, accuracy: 0.01)
+        XCTAssertEqual(handle.maxY, card.maxY, accuracy: 0.01)
+        XCTAssertFalse(
+            CalendarLayout.touchHitsCapsule(CGPoint(x: card.midX, y: card.minY + 8), capsule: handle),
+            "card body must still open Details"
+        )
+        XCTAssertTrue(
+            CalendarLayout.touchHitsCapsule(CGPoint(x: card.midX, y: handle.midY), capsule: handle)
+        )
+        let painted = CGRect(x: 40, y: 220, width: 200, height: 16)
+        XCTAssertEqual(
+            CalendarLayout.durationHandleWindowRect(handleInWindow: painted, hostInWindow: card).height,
+            16,
+            accuracy: 0.01
+        )
+    }
+
     func testHourContentPointDoesNotDoubleCountOffset() {
         // Classic UIScrollView: bounds.origin == contentOffset.
         let classic = CalendarLayout.hourContentPoint(

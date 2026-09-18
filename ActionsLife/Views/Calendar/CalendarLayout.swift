@@ -128,22 +128,39 @@ enum CalendarLayout {
     }
 
     /// Convert a touch on the hour UIScrollView into content coordinates.
+    /// Always use offset/bounds math — a SwiftUI content subview is often
+    /// viewport-sized, so `location(in: canvas)` misses the painted capsule
+    /// (`e2fba41`).
     static func hourContentPoint(touch: UITouch, in scroll: UIScrollView) -> CGPoint {
-        let canvas = scroll.subviews.first {
-            $0.bounds.width >= scroll.contentSize.width - 2
-                && $0.bounds.height >= scroll.contentSize.height - 2
-                && $0.bounds.width > 32
-                && $0.bounds.height > 32
-        }
-        if let canvas {
-            return touch.location(in: canvas)
-        }
-        return hourContentPoint(
+        hourContentPoint(
             locationInScroll: touch.location(in: scroll),
             contentOffset: scroll.contentOffset,
             boundsOrigin: scroll.bounds.origin,
             adjustedContentInset: scroll.adjustedContentInset
         )
+    }
+
+    /// Bottom `handle` band of a UIKit view in window space. Zero-size
+    /// representables fall back to the host; a full-card host is clipped to
+    /// the bottom 16pt so a title tap still opens Details.
+    static func durationHandleWindowRect(
+        handleInWindow: CGRect,
+        hostInWindow: CGRect,
+        handleHeight: CGFloat = 16
+    ) -> CGRect {
+        var rect = handleInWindow
+        if rect.width < 2 || rect.height < 2 {
+            rect = hostInWindow
+        }
+        if rect.height > handleHeight + 8 {
+            rect = CGRect(
+                x: rect.minX,
+                y: rect.maxY - handleHeight,
+                width: rect.width,
+                height: handleHeight
+            )
+        }
+        return rect
     }
 
     /// Capsule-only hit. Card-body points must return false so Details still opens.

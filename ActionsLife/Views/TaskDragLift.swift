@@ -463,13 +463,13 @@ struct HoldThenDragBridge: UIViewRepresentable {
 
 /// Immediate pan on the visible duration capsule (no long-press).
 ///
-/// Installed on the hour `UIScrollView`. `shouldReceive` uses the capsule
-/// rect in **content** coordinates (not GeometryReader global — that frame
-/// lagged the visible card at `cafff4f`, so the pan never `.began` and the
-/// hour grid scrolled). Do **not** set `isScrollEnabled = false` to freeze:
-/// that cancelled the pan at `a0da6ed` before `translation.y` could commit.
-/// Pin `contentOffset` instead, force `.began` after a short vertical move,
-/// and write `translation.y` through `.ended`.
+/// Installed on the hour `UIScrollView` (that view is under the finger).
+/// `shouldReceive` uses the handle **UIView** window frame (not GeometryReader
+/// global — that lagged at `cafff4f`) and content-space math without picking a
+/// SwiftUI canvas subview (`e2fba41` missed the painted capsule). Do **not**
+/// set `isScrollEnabled = false` (`a0da6ed` cancelled the pan). Pin
+/// `contentOffset`, force `.began` after a short vertical move, and write
+/// `translation.y` through `.ended`. Card-body taps still open Details.
 struct DurationResizeBridge: UIViewRepresentable {
     var enabled: Bool
     var capsuleInContent: CGRect
@@ -485,11 +485,13 @@ struct DurationResizeBridge: UIViewRepresentable {
     func makeUIView(context: Context) -> InstallerView {
         let view = InstallerView()
         view.coordinator = context.coordinator
+        context.coordinator.handleView = view
         return view
     }
 
     func updateUIView(_ uiView: InstallerView, context: Context) {
         context.coordinator.parent = self
+        context.coordinator.handleView = uiView
         if !context.coordinator.dragging {
             context.coordinator.pan.isEnabled = enabled
         }
@@ -502,6 +504,7 @@ struct DurationResizeBridge: UIViewRepresentable {
         let pan = DurationPanRecognizer()
         private(set) var dragging = false
         private var lockedOffsets: [(UIScrollView, CGPoint)] = []
+        weak var handleView: InstallerView?
 
         init(parent: DurationResizeBridge) {
             self.parent = parent
@@ -556,11 +559,26 @@ struct DurationResizeBridge: UIViewRepresentable {
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            guard parent.enabled, let scroll = gestureRecognizer.view as? UIScrollView else { return false }
+            guard parent.enabled else { return false }
+            if let handle = handleView, handleHitsCapsule(touch, handle: handle) {
+                return true
+            }
+            guard let scroll = gestureRecognizer.view as? UIScrollView else { return false }
             return CalendarLayout.touchHitsCapsule(
                 CalendarLayout.hourContentPoint(touch: touch, in: scroll),
                 capsule: parent.capsuleInContent
             )
+        }
+
+        /// UIKit frame of the 16pt overlay — not SwiftUI GeometryReader.
+        private func handleHitsCapsule(_ touch: UITouch, handle: UIView) -> Bool {
+            guard handle.window != nil else { return false }
+            let host = handle.superview ?? handle
+            let rect = CalendarLayout.durationHandleWindowRect(
+                handleInWindow: handle.convert(handle.bounds, to: nil),
+                hostInWindow: host.convert(host.bounds, to: nil)
+            )
+            return CalendarLayout.touchHitsCapsule(touch.location(in: nil), capsule: rect)
         }
 
         func gestureRecognizer(
