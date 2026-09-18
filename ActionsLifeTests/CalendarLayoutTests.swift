@@ -1007,6 +1007,17 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(storeWrites[0].1, minutes, accuracy: 0.01)
         XCTAssertGreaterThan(storeWrites[0].1, 30)
         XCTAssertEqual(minutes, 30 + 80 / 50 * 60, accuracy: 0.01)
+
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        scroll.contentSize = CGSize(width: 390, height: 1200)
+        scroll.contentOffset = CGPoint(x: 0, y: 296)
+        coordinator.lockOffsets(from: scroll)
+        XCTAssertTrue(coordinator.hasPinnedClaim(), "claim pins hours during the drag")
+        coordinator.followClaimedHourScroller(windowY: 344 + 40, ended: false)
+        XCTAssertTrue(coordinator.hasPinnedClaim(), "pin holds through follow writes")
+        coordinator.finishClaimedHourPan(windowY: 344 + 80)
+        XCTAssertFalse(coordinator.hasPinnedClaim(), "dropClaim() on lift unsticks the hour grid")
+        XCTAssertEqual(storeWrites.last?.1, minutes, accuracy: 0.01)
     }
 
     func testTitleStaticTextIsDetailsNotDurationHandle() {
