@@ -94,7 +94,6 @@ struct DayColumnView: View {
         .frame(width: columnWidth, height: canvasHeight, alignment: .topLeading)
         .background { DropZoneReporter(kind: .timed(dayISO)) }
         .contentShape(Rectangle())
-        .allowsHitTesting(!chrome.isResizing)
     }
 
     private var hourGrid: some View {

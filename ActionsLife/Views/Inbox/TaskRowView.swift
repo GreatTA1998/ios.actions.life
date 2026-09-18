@@ -77,7 +77,6 @@ struct TaskRowView: View {
             .taskDragLift(id: tree.id, name: tree.task.name, duration: tree.task.duration) { target in
                 store.applyDrop(target, taskID: tree.id, fromCalendar: false)
             }
-            .allowsHitTesting(!chrome.isResizing)
             .contextMenu {
                 Button("Open", systemImage: "doc.text") { selectedTaskID = tree.id }
                 Button("Add subtask", systemImage: "plus") {

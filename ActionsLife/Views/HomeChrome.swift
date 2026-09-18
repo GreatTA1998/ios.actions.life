@@ -3,6 +3,10 @@ import Foundation
 import SwiftUI
 
 /// Shared pointer session so split, scroll, and drag-drop cannot all handle one touch.
+///
+/// `isResizing` must only be set by `SplitResizeBridge`, which clears it on
+/// ended **and** cancelled/failed. A stuck `true` disables scrolling via
+/// `pointerCaptured` → `scrollDisabled`.
 @Observable
 final class HomeChrome {
     static let holdDelay: TimeInterval = 0.15

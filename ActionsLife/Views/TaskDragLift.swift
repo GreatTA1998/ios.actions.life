@@ -1,7 +1,12 @@
 import SwiftUI
 import UIKit
 
-/// Hold 150ms (web/Expo) then drag in window coordinates. Survives ScrollView competition.
+/// Hold 150ms (web/Expo) then drag in window coordinates.
+///
+/// Important: do **not** require UIScrollView pans to fail before this recognizer.
+/// That pattern (shouldBeRequiredToFailBy → pan) permanently breaks scrolling once
+/// SwiftUI rebuilds the hierarchy after a split resize. Instead we coexist with
+/// scroll until the hold fires, then HomeChrome.pointerCaptured disables scroll.
 struct TaskDragLift: ViewModifier {
     let taskID: String
     let name: String
@@ -58,7 +63,6 @@ struct TaskDragLift: ViewModifier {
                 )
             }
             .opacity(chrome.drag?.taskID == taskID ? 0.35 : 1)
-            .allowsHitTesting(!chrome.isResizing)
     }
 }
 
@@ -110,7 +114,6 @@ struct PaneFrameReporter: View {
 
 /// Applies `delta` to the pane's UIScrollView. Background bridges sit beside the
 /// ScrollView, so we search sibling subtrees — not only ancestors.
-/// `generation` forces updates while the delta stays constant at the edge.
 struct ScrollEdgeBridge: UIViewRepresentable {
     var delta: CGSize
     var generation: Int
@@ -161,7 +164,94 @@ struct ScrollEdgeBridge: UIViewRepresentable {
     }
 }
 
-/// Installs a long-press on the SwiftUI host view so ScrollView cannot cancel a still hold.
+/// UIKit split-handle pan. Mirrors Expo SplitPane: always clear dragging on
+/// release **and** terminate — SwiftUI DragGesture often skips `onEnded` when
+/// the VStack rebuilds mid-drag, which used to leave `isResizing` stuck and
+/// freeze both panes (`allowsHitTesting(false)` + `scrollDisabled`).
+struct SplitResizeBridge: UIViewRepresentable {
+    var enabled: Bool
+    var onBegan: () -> Void
+    var onChanged: (_ translationY: CGFloat) -> Void
+    var onEnded: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIView(context: Context) -> HandleView {
+        let view = HandleView()
+        view.coordinator = context.coordinator
+        context.coordinator.attach(to: view)
+        return view
+    }
+
+    func updateUIView(_ uiView: HandleView, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.pan.isEnabled = enabled
+        uiView.coordinator = context.coordinator
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: SplitResizeBridge
+        let pan = UIPanGestureRecognizer()
+
+        init(parent: SplitResizeBridge) {
+            self.parent = parent
+            super.init()
+            pan.addTarget(self, action: #selector(handlePan(_:)))
+            pan.delegate = self
+            pan.cancelsTouchesInView = true
+            pan.maximumNumberOfTouches = 1
+        }
+
+        func attach(to view: UIView) {
+            guard pan.view !== view else { return }
+            pan.view?.removeGestureRecognizer(pan)
+            view.addGestureRecognizer(pan)
+        }
+
+        @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
+            switch gesture.state {
+            case .began:
+                parent.onBegan()
+                parent.onChanged(gesture.translation(in: gesture.view).y)
+            case .changed:
+                parent.onChanged(gesture.translation(in: gesture.view).y)
+            case .ended, .cancelled, .failed:
+                // Always clear — same contract as Expo onPanResponderTerminate.
+                parent.onEnded()
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            parent.enabled
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+        ) -> Bool {
+            false
+        }
+    }
+
+    final class HandleView: UIView {
+        weak var coordinator: Coordinator?
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            backgroundColor = .clear
+            isUserInteractionEnabled = true
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { nil }
+    }
+}
+
+/// Long-press that coexists with scroll until the hold fires.
 struct HoldThenDragBridge: UIViewRepresentable {
     var enabled: Bool
     var holdDelay: TimeInterval
@@ -185,6 +275,8 @@ struct HoldThenDragBridge: UIViewRepresentable {
     func updateUIView(_ uiView: InstallerView, context: Context) {
         context.coordinator.parent = self
         context.coordinator.press?.isEnabled = enabled
+        context.coordinator.press?.minimumPressDuration = holdDelay
+        context.coordinator.press?.allowableMovement = slop
         uiView.coordinator = context.coordinator
         uiView.ensureInstalled()
     }
@@ -225,18 +317,10 @@ struct HoldThenDragBridge: UIViewRepresentable {
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
         ) -> Bool {
-            // Once dragging, do not let UIScrollView pan share the touch.
+            // Before lift: let the scroll pan run (quick flicks must not wait 150ms).
+            // After lift: HomeChrome.scrollDisabled takes over; refuse sharing.
             if dragging { return false }
-            if other is UIPanGestureRecognizer { return false }
             return true
-        }
-
-        func gestureRecognizer(
-            _ gestureRecognizer: UIGestureRecognizer,
-            shouldBeRequiredToFailBy other: UIGestureRecognizer
-        ) -> Bool {
-            // Scroll pans must wait for the hold to fail (moved past slop) before scrolling.
-            other is UIPanGestureRecognizer
         }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {

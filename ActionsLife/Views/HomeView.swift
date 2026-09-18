@@ -54,12 +54,39 @@ struct HomeView: View {
                                     generation: chrome.edgeScrollGeneration
                                 )
                             }
-                            .allowsHitTesting(!chrome.isResizing)
 
                             SplitHandle()
                                 .frame(height: handle)
-                                .gesture(splitGesture(height: geo.size.height, store: store))
-                                .allowsHitTesting(chrome.drag == nil)
+                                .overlay {
+                                    SplitResizeBridge(
+                                        enabled: chrome.drag == nil,
+                                        onBegan: {
+                                            chrome.isResizing = true
+                                            splitDragStart = visualSplit ?? store.listHeightSplit
+                                        },
+                                        onChanged: { translationY in
+                                            let remaining = max(1, geo.size.height - HomeChrome.splitHandle)
+                                            let next = HomeChrome.clampSplitFraction(
+                                                splitDragStart + Double(translationY / remaining),
+                                                height: geo.size.height
+                                            )
+                                            var transaction = Transaction()
+                                            transaction.disablesAnimations = true
+                                            withTransaction(transaction) {
+                                                visualSplit = next
+                                            }
+                                        },
+                                        onEnded: {
+                                            // Always runs on ended/cancelled/failed — never leave
+                                            // isResizing stuck (that used to freeze both panes).
+                                            chrome.isResizing = false
+                                            let value = visualSplit ?? store.listHeightSplit
+                                            store.setListHeightSplit(value, height: geo.size.height)
+                                            visualSplit = store.listHeightSplit
+                                        }
+                                    )
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                }
 
                             InboxView(
                                 store: store,
@@ -80,7 +107,6 @@ struct HomeView: View {
                                     generation: chrome.edgeScrollGeneration
                                 )
                             }
-                            .allowsHitTesting(!chrome.isResizing)
                         }
                         .coordinateSpace(name: "homeSplit")
                         .background {
@@ -143,33 +169,6 @@ struct HomeView: View {
                 store = next
             }
         }
-    }
-
-    private func splitGesture(height: CGFloat, store: TaskTreeStore) -> some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .named("homeSplit"))
-            .onChanged { value in
-                if !chrome.isResizing {
-                    chrome.isResizing = true
-                    splitDragStart = visualSplit ?? store.listHeightSplit
-                }
-                let remaining = max(1, height - HomeChrome.splitHandle)
-                // Moving handle down grows the list (Expo: start - dy/remaining).
-                let next = HomeChrome.clampSplitFraction(
-                    splitDragStart + Double(value.translation.height / remaining),
-                    height: height
-                )
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    visualSplit = next
-                }
-            }
-            .onEnded { _ in
-                chrome.isResizing = false
-                let value = visualSplit ?? store.listHeightSplit
-                store.setListHeightSplit(value, height: height)
-                visualSplit = store.listHeightSplit
-            }
     }
 
     @ViewBuilder
