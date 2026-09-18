@@ -693,12 +693,12 @@ struct HourDurationPanBridge: UIViewRepresentable {
             writeDuration != nil
         }
 
-        /// minutes = start + (location.y − began.y) / hourHeight * 60.
+        /// minutes = start + (windowY − beganWindowY) / paintedHourHeight * 60.
         func minutesFromBegan(locationY: CGFloat) -> Double {
             let began = beganWindowY ?? locationY
-            return CalendarLayout.durationFromLocationDelta(
+            return CalendarLayout.paintedHandleMinutes(
                 start: capturedStartDuration,
-                locationDeltaY: locationY - began,
+                windowDeltaY: locationY - began,
                 pixelsPerHour: parent.pixelsPerHour
             )
         }

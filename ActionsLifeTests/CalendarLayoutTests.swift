@@ -913,6 +913,60 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(commits.last?.1, CalendarLayout.snapDuration(minutes, snap: 15))
     }
 
+    func testEightyPointHandleFollowGrowsPaintedBlockFrame() {
+        // `58714d8`: callback / setDuration logs are not enough. The painted
+        // `calendar.timed.*` capsule must get taller. +80 pt on the 16pt
+        // handle uses the hour-grid hourHeight.
+        let pixels = 50.0
+        let hourH = CalendarLayout.hourHeight(pixelsPerHour: pixels)
+        XCTAssertEqual(hourH, 50, accuracy: 0.01)
+        let start = event(id: "pr3", time: "10:00", duration: 30)
+        let before = CalendarLayout.placeTimed([start], pixelsPerHour: pixels)[0]
+        let beforeFrame = CalendarLayout.blockFrame(event: before, columnWidth: 220)
+        XCTAssertEqual(beforeFrame.height, 36, accuracy: 0.01)
+
+        let minutes = CalendarLayout.paintedHandleMinutes(
+            start: 30,
+            windowDeltaY: 80,
+            pixelsPerHour: pixels
+        )
+        XCTAssertEqual(minutes, 30 + 80 / hourH * 60, accuracy: 0.01)
+        XCTAssertGreaterThan(minutes, 35)
+
+        var live: Double = 30
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { [] },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: pixels,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { id, value in
+                XCTAssertEqual(id, "pr3")
+                live = value
+            },
+            onEnded: { _, _ in },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        coordinator.bindStoreWrites(from: bridge)
+        XCTAssertTrue(coordinator.hasLiveSetDurationCallback())
+        coordinator.startWindowFollow(taskID: "pr3", startDuration: 30, beganWindowY: 310.7)
+        coordinator.followWindowY(310.7 + 80, ended: false)
+        XCTAssertEqual(live, minutes, accuracy: 0.01)
+
+        let grown = event(id: "pr3", time: "10:00", duration: live)
+        let after = CalendarLayout.placeTimed([grown], pixelsPerHour: pixels)[0]
+        let afterFrame = CalendarLayout.blockFrame(event: after, columnWidth: 220)
+        XCTAssertGreaterThan(afterFrame.height, beforeFrame.height)
+        XCTAssertGreaterThan(afterFrame.height, 39)
+        XCTAssertEqual(afterFrame.height, after.height, accuracy: 0.01)
+        XCTAssertEqual(after.height, CGFloat(minutes / 60) * hourH, accuracy: 0.01)
+    }
+
     func testTitleStaticTextIsDetailsNotDurationHandle() {
         // `b8f1337`: StaticText `calendar.timed.*` `(87.3, 312.7, 122.7, 18)`
         // must stay Details. Duration is only the 16pt handle below the title.

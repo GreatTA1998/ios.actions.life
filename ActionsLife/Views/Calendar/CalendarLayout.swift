@@ -642,6 +642,18 @@ enum CalendarLayout {
         previewDuration(start: start, deltaY: locationDeltaY, pixelsPerHour: pixelsPerHour)
     }
 
+    /// 16pt handle follow on the painted hour grid:
+    /// `minutes = start + windowDeltaY / hourHeight * 60`.
+    /// `hourHeight` is the same `max(36, pixelsPerHour)` as the hour rows.
+    static func paintedHandleMinutes(
+        start: Double,
+        windowDeltaY: CGFloat,
+        pixelsPerHour: Double
+    ) -> Double {
+        let hourH = hourHeight(pixelsPerHour: pixelsPerHour)
+        return start + Double(windowDeltaY) / Double(hourH) * 60
+    }
+
     /// Capsule pan `translation.y` → new duration (block end instant).
     static func previewDuration(start: Double, deltaY: CGFloat, pixelsPerHour: Double) -> Double {
         let minutesPerPoint = 60 / Double(hourHeight(pixelsPerHour: pixelsPerHour))
