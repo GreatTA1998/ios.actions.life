@@ -192,6 +192,14 @@ final class DragDropTests: XCTestCase {
         XCTAssertNil(chrome.durationResize)
     }
 
+    func testLiftIgnoresDurationHandleBand() {
+        XCTAssertEqual(HomeChrome.durationHandleHit, 28)
+        let card = CGRect(x: 0, y: 0, width: 200, height: 36)
+        let handleY = card.height - HomeChrome.durationHandleHit
+        XCTAssertLessThan(handleY, 12)
+        XCTAssertGreaterThan(card.height - handleY, 20)
+    }
+
     func testCancelDurationResizeClearsPointerCapture() {
         let chrome = HomeChrome()
         chrome.beginDurationResize(taskID: "block", duration: 30)

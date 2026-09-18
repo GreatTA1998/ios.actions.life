@@ -90,6 +90,22 @@ enum CalendarLayout {
         max(0, nowY(now: now, calendar: calendar, pixelsPerHour: pixelsPerHour) - headroom)
     }
 
+    /// Timed-canvas content offset so today is leading and `now` sits near the top.
+    /// Headers live outside this scroll (sticky), so y is canvas-only — not hour 0 of a tall column.
+    static func timedContentOffset(
+        todayIndex: Int,
+        columnWidth: CGFloat,
+        now: Date = .now,
+        calendar: Calendar = .current,
+        pixelsPerHour: Double,
+        headroom: CGFloat = 48
+    ) -> CGPoint {
+        CGPoint(
+            x: max(0, CGFloat(todayIndex) * columnWidth),
+            y: nowScrollY(now: now, calendar: calendar, pixelsPerHour: pixelsPerHour, headroom: headroom)
+        )
+    }
+
     /// Web `DurationAdjuster.updateDuration`: minutes += deltaY / (pixelsPerHour / 60).
     static func previewDuration(start: Double, deltaY: CGFloat, pixelsPerHour: Double) -> Double {
         let minutesPerPoint = 60 / Double(hourHeight(pixelsPerHour: pixelsPerHour))

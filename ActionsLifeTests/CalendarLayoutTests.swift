@@ -78,6 +78,25 @@ final class CalendarLayoutTests: XCTestCase {
         )
     }
 
+    func testTimedContentOffsetJumpsToEveningNowNotMorning() {
+        let calendar = Calendar(identifier: .gregorian)
+        var comps = DateComponents(year: 2026, month: 9, day: 18, hour: 22, minute: 0)
+        comps.timeZone = calendar.timeZone
+        let now = calendar.date(from: comps) ?? Date()
+        let offset = CalendarLayout.timedContentOffset(
+            todayIndex: 14,
+            columnWidth: 220,
+            now: now,
+            calendar: calendar,
+            pixelsPerHour: 50,
+            headroom: 48
+        )
+        XCTAssertEqual(offset.x, 14 * 220, accuracy: 0.01)
+        XCTAssertEqual(offset.y, 22 * 50 - 48, accuracy: 0.01)
+        // Hour 8 at 50px would be 400 — evening now must sit far below that.
+        XCTAssertGreaterThan(offset.y, 8 * 50)
+    }
+
     func testDayWindowIsPastPlusTodayPlusFuture() {
         let calendar = Calendar(identifier: .gregorian)
         var comps = DateComponents(year: 2026, month: 9, day: 18)

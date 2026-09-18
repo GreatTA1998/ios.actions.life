@@ -86,41 +86,52 @@ struct CalendarEventCard: View {
                     )
             }
         }
+        .background { DropZoneReporter(kind: .nest(task.id)) }
+        .taskDragLift(id: task.id, name: task.name, duration: task.duration, fromCalendar: true, onDrop: onDrop)
         .overlay(alignment: .bottom) {
             if !compact {
                 durationHandle
             }
         }
-        .background { DropZoneReporter(kind: .nest(task.id)) }
-        .taskDragLift(id: task.id, name: task.name, duration: task.duration, fromCalendar: true, onDrop: onDrop)
     }
 
     private var durationHandle: some View {
-        ZStack(alignment: .bottom) {
-            if chrome.durationResize?.taskID == task.id {
-                Rectangle()
-                    .fill(Theme.dragPreview.opacity(0.85))
-                    .frame(height: 1)
-            }
-            DurationResizeBridge(
-                enabled: chrome.drag == nil && !chrome.isResizing
-                    && (chrome.durationResize == nil || chrome.durationResize?.taskID == task.id),
-                holdDelay: HomeChrome.holdDelay,
-                slop: HomeChrome.touchSlop,
-                onBegan: {
-                    chrome.beginDurationResize(taskID: task.id, duration: task.duration)
-                },
-                onChanged: { chrome.moveDurationResize(deltaY: $0) },
-                onEnded: {
-                    if let result = chrome.finishDurationResize() {
-                        onResizeDuration(result.duration)
+        Color.primary.opacity(0.001)
+            .overlay(alignment: .bottom) {
+                VStack(spacing: 4) {
+                    if chrome.durationResize?.taskID == task.id {
+                        Rectangle()
+                            .fill(Theme.dragPreview.opacity(0.85))
+                            .frame(height: 1)
                     }
-                },
-                onCancel: { chrome.cancelDurationResize() }
-            )
-        }
-        .frame(height: 22)
-        .offset(y: 8)
-        .accessibilityLabel("Resize duration")
+                    Capsule()
+                        .fill(Theme.handle)
+                        .frame(width: 22, height: 3)
+                        .padding(.bottom, 4)
+                }
+                .allowsHitTesting(false)
+            }
+            .overlay {
+                DurationResizeBridge(
+                    enabled: chrome.drag == nil && !chrome.isResizing
+                        && (chrome.durationResize == nil || chrome.durationResize?.taskID == task.id),
+                    holdDelay: HomeChrome.holdDelay,
+                    slop: HomeChrome.touchSlop,
+                    onBegan: {
+                        chrome.beginDurationResize(taskID: task.id, duration: task.duration)
+                    },
+                    onChanged: { chrome.moveDurationResize(deltaY: $0) },
+                    onEnded: {
+                        if let result = chrome.finishDurationResize() {
+                            onResizeDuration(result.duration)
+                        }
+                    },
+                    onCancel: { chrome.cancelDurationResize() }
+                )
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: HomeChrome.durationHandleHit)
+            .contentShape(Rectangle())
+            .accessibilityLabel("Resize duration")
     }
 }

@@ -30,7 +30,9 @@ struct TaskDragLift: ViewModifier {
             }
             .background {
                 HoldThenDragBridge(
-                    enabled: !chrome.isResizing && (chrome.drag == nil || chrome.drag?.taskID == taskID),
+                    enabled: !chrome.isResizing
+                        && chrome.durationResize == nil
+                        && (chrome.drag == nil || chrome.drag?.taskID == taskID),
                     holdDelay: HomeChrome.holdDelay,
                     slop: HomeChrome.touchSlop,
                     isActive: chrome.drag?.taskID == taskID,
@@ -138,6 +140,79 @@ struct ScrollEdgeBridge: UIViewRepresentable {
             )
             guard next != scroll.contentOffset else { return }
             scroll.setContentOffset(next, animated: false)
+        }
+
+        private func findPaneScrollView() -> UIScrollView? {
+            var child: UIView = self
+            var parent = superview
+            while let container = parent {
+                if let scroll = container as? UIScrollView { return scroll }
+                for sub in container.subviews where sub !== child {
+                    if let found = firstScrollView(in: sub) { return found }
+                }
+                child = container
+                parent = container.superview
+            }
+            return nil
+        }
+
+        private func firstScrollView(in root: UIView) -> UIScrollView? {
+            if let scroll = root as? UIScrollView { return scroll }
+            for sub in root.subviews {
+                if let found = firstScrollView(in: sub) { return found }
+            }
+            return nil
+        }
+    }
+}
+
+/// Jumps the calendar UIScrollView to a content offset (web `jumpToToday`).
+/// ScrollViewReader + `.position()` markers do not participate in layout, so
+/// `scrollTo` landed on the column origin (hours 8–15 via scrollPosition) instead of now.
+struct ScrollToOffsetBridge: UIViewRepresentable {
+    var offset: CGPoint
+    var generation: Int
+
+    func makeUIView(context: Context) -> BridgeView {
+        BridgeView()
+    }
+
+    func updateUIView(_ uiView: BridgeView, context: Context) {
+        uiView.target = offset
+        uiView.apply(generation: generation)
+    }
+
+    final class BridgeView: UIView {
+        var target: CGPoint = .zero
+        private var appliedGeneration = -1
+
+        func apply(generation: Int) {
+            guard generation != appliedGeneration else { return }
+            attempt(generation: generation, remaining: 12)
+        }
+
+        private func attempt(generation: Int, remaining: Int) {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard let scroll = self.findPaneScrollView() else {
+                    if remaining > 0 { self.attempt(generation: generation, remaining: remaining - 1) }
+                    return
+                }
+                let ready = scroll.contentSize.height > self.target.y + 40
+                    && scroll.bounds.height > 0
+                guard ready else {
+                    if remaining > 0 { self.attempt(generation: generation, remaining: remaining - 1) }
+                    return
+                }
+                let maxX = max(0, scroll.contentSize.width - scroll.bounds.width)
+                let maxY = max(0, scroll.contentSize.height - scroll.bounds.height)
+                let next = CGPoint(
+                    x: min(maxX, max(0, self.target.x)),
+                    y: min(maxY, max(0, self.target.y))
+                )
+                scroll.setContentOffset(next, animated: false)
+                self.appliedGeneration = generation
+            }
         }
 
         private func findPaneScrollView() -> UIScrollView? {
@@ -326,6 +401,12 @@ struct HoldThenDragBridge: UIViewRepresentable {
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             parent.enabled
         }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard let view = gestureRecognizer.view else { return true }
+            let y = touch.location(in: view).y
+            return y <= view.bounds.height - HomeChrome.durationHandleHit
+        }
     }
 
     final class InstallerView: UIView {
@@ -455,6 +536,10 @@ struct DurationResizeBridge: UIViewRepresentable {
             super.init(frame: frame)
             backgroundColor = .clear
             isUserInteractionEnabled = true
+        }
+
+        override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+            bounds.insetBy(dx: 0, dy: -6).contains(point)
         }
 
         @available(*, unavailable)

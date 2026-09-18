@@ -15,6 +15,8 @@ final class HomeChrome {
     static let edgeStep: CGFloat = 16
     static let splitHandle: CGFloat = 36
     static let splitMinPane: CGFloat = 48
+    /// Bottom edge of a timed block reserved for duration resize (lift ignores this band).
+    static let durationHandleHit: CGFloat = 28
 
     var isResizing = false
     var isLifting = false

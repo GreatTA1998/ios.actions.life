@@ -11,6 +11,8 @@ struct DayColumnView: View {
     @Binding var composerText: String
     var onCommitComposer: () -> Void
     var onCancelComposer: () -> Void
+    var showsHeader: Bool = true
+    var showsTimedCanvas: Bool = true
     @Environment(HomeChrome.self) private var chrome
 
     private var hourHeight: CGFloat { CalendarLayout.hourHeight(pixelsPerHour: pixelsPerHour) }
@@ -30,8 +32,8 @@ struct DayColumnView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-            timedCanvas
+            if showsHeader { header }
+            if showsTimedCanvas { timedCanvas }
         }
         .frame(width: columnWidth)
         .background(Theme.calendarBackground)
@@ -134,10 +136,6 @@ struct DayColumnView: View {
             }
             if isToday {
                 nowIndicator
-                Color.clear
-                    .frame(width: 1, height: 1)
-                    .id("scroll-now")
-                    .position(x: 8, y: CalendarLayout.nowScrollY(pixelsPerHour: pixelsPerHour) + 0.5)
             }
         }
         .frame(width: columnWidth, height: canvasHeight, alignment: .topLeading)
