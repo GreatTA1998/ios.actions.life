@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import UIKit
 
 enum CalendarLayout {
     static let startHour = 0
@@ -92,26 +93,70 @@ enum CalendarLayout {
         return hittable.contains(location)
     }
 
-    /// Window-space hit for the painted duration capsule only — not the card
-    /// title. A 36pt block's body tap must still open Details.
+    /// Bottom 16pt of a timed card in the hour scroller's **content** space.
+    static func durationCapsuleRect(
+        columnIndex: Int,
+        columnWidth: CGFloat,
+        event: PlacedEvent,
+        handle: CGFloat = 16
+    ) -> CGRect {
+        let height = max(event.height, 36)
+        return CGRect(
+            x: CGFloat(columnIndex) * columnWidth + 6,
+            y: event.y + height - handle,
+            width: max(0, columnWidth - 12),
+            height: handle
+        )
+    }
+
+    /// Convert a location on the hour UIScrollView into **content** coordinates.
+    ///
+    /// UIScrollView may keep `bounds.origin` at zero (SwiftUI) or equal to
+    /// `contentOffset` (classic). Subtracting `bounds.origin` avoids counting
+    /// the offset twice — a double-count misses the visible capsule and the
+    /// hour grid steals the pan (`cafff4f`).
+    static func hourContentPoint(
+        locationInScroll: CGPoint,
+        contentOffset: CGPoint,
+        boundsOrigin: CGPoint,
+        adjustedContentInset: UIEdgeInsets = .zero
+    ) -> CGPoint {
+        CGPoint(
+            x: locationInScroll.x + contentOffset.x - adjustedContentInset.left - boundsOrigin.x,
+            y: locationInScroll.y + contentOffset.y - adjustedContentInset.top - boundsOrigin.y
+        )
+    }
+
+    /// Convert a touch on the hour UIScrollView into content coordinates.
+    static func hourContentPoint(touch: UITouch, in scroll: UIScrollView) -> CGPoint {
+        let canvas = scroll.subviews.first {
+            $0.bounds.width >= scroll.contentSize.width - 2
+                && $0.bounds.height >= scroll.contentSize.height - 2
+                && $0.bounds.width > 32
+                && $0.bounds.height > 32
+        }
+        if let canvas {
+            return touch.location(in: canvas)
+        }
+        return hourContentPoint(
+            locationInScroll: touch.location(in: scroll),
+            contentOffset: scroll.contentOffset,
+            boundsOrigin: scroll.bounds.origin,
+            adjustedContentInset: scroll.adjustedContentInset
+        )
+    }
+
+    /// Capsule-only hit. Card-body points must return false so Details still opens.
     static func touchHitsCapsule(
-        windowPoint: CGPoint,
-        capsuleGlobal: CGRect,
+        _ point: CGPoint,
+        capsule: CGRect,
         slopX: CGFloat = 6,
         slopY: CGFloat = 4
     ) -> Bool {
-        guard !capsuleGlobal.isNull, !capsuleGlobal.isInfinite,
-              capsuleGlobal.width > 1, capsuleGlobal.height > 1 else {
+        guard !capsule.isNull, !capsule.isInfinite, capsule.width > 1, capsule.height > 1 else {
             return false
         }
-        let band = min(16, capsuleGlobal.height)
-        let tight = CGRect(
-            x: capsuleGlobal.minX,
-            y: capsuleGlobal.maxY - band,
-            width: capsuleGlobal.width,
-            height: band
-        )
-        return tight.insetBy(dx: -slopX, dy: -slopY).contains(windowPoint)
+        return capsule.insetBy(dx: -slopX, dy: -slopY).contains(point)
     }
 
     static func scrollTargetHour(now: Date = .now, calendar: Calendar = .current) -> Int {

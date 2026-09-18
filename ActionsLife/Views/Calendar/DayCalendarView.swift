@@ -147,7 +147,7 @@ struct DayCalendarView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 ZStack(alignment: .topLeading) {
                     HStack(alignment: .top, spacing: 0) {
-                        ForEach(days, id: \.self) { day in
+                        ForEach(Array(days.enumerated()), id: \.element) { index, day in
                             DayColumnView(
                                 store: store,
                                 day: day,
@@ -160,7 +160,8 @@ struct DayCalendarView: View {
                                 onCommitComposer: onCommitComposer,
                                 onCancelComposer: onCancelComposer,
                                 showsHeader: false,
-                                showsTimedCanvas: true
+                                showsTimedCanvas: true,
+                                columnIndex: index
                             )
                         }
                     }

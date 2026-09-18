@@ -463,13 +463,16 @@ struct HoldThenDragBridge: UIViewRepresentable {
 
 /// Immediate pan on the visible duration capsule (no long-press).
 ///
-/// The representable itself is **not** the hit target (SwiftUI hosting frames
-/// lag `.position` / `.offset`). The pan is installed on the hour
-/// `UIScrollView`, which *is* under the finger, and `shouldReceive` keeps it
-/// to the capsule's GeometryReader **window** frame.
+/// Installed on the hour `UIScrollView`. `shouldReceive` uses the capsule
+/// rect in **content** coordinates (not GeometryReader global — that frame
+/// lagged the visible card at `cafff4f`, so the pan never `.began` and the
+/// hour grid scrolled). Do **not** set `isScrollEnabled = false` to freeze:
+/// that cancelled the pan at `a0da6ed` before `translation.y` could commit.
+/// Pin `contentOffset` instead, force `.began` after a short vertical move,
+/// and write `translation.y` through `.ended`.
 struct DurationResizeBridge: UIViewRepresentable {
     var enabled: Bool
-    var capsuleGlobal: CGRect
+    var capsuleInContent: CGRect
     var onBegan: () -> Void
     var onChanged: (_ translationY: CGFloat) -> Void
     var onEnded: () -> Void
@@ -498,20 +501,23 @@ struct DurationResizeBridge: UIViewRepresentable {
         var parent: DurationResizeBridge
         let pan = DurationPanRecognizer()
         private(set) var dragging = false
-        private var frozen: [UIScrollView] = []
+        private var lockedOffsets: [(UIScrollView, CGPoint)] = []
 
         init(parent: DurationResizeBridge) {
             self.parent = parent
             super.init()
+            pan.owner = self
             pan.addTarget(self, action: #selector(handlePan(_:)))
             pan.delegate = self
-            pan.cancelsTouchesInView = false
+            // Capsule-only (`shouldReceive`). Cancelling the scroll view's
+            // remaining touches after `.began` must not apply to card-body taps.
+            pan.cancelsTouchesInView = true
             pan.maximumNumberOfTouches = 1
         }
 
         deinit {
             pan.view?.removeGestureRecognizer(pan)
-            unfreezeScrollers()
+            unlockOffsets()
         }
 
         @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
@@ -519,25 +525,26 @@ struct DurationResizeBridge: UIViewRepresentable {
             switch gesture.state {
             case .began:
                 dragging = true
-                freezeScrollers(from: gesture.view)
+                lockOffsets(from: gesture.view)
+                restoreLockedOffsets()
                 parent.onBegan()
                 parent.onChanged(deltaY)
             case .changed:
                 guard dragging else { return }
+                restoreLockedOffsets()
                 parent.onChanged(deltaY)
             case .ended:
                 guard dragging else { return }
                 dragging = false
                 parent.onChanged(deltaY)
-                unfreezeScrollers()
+                unlockOffsets()
                 parent.onEnded()
             case .cancelled, .failed:
-                if dragging {
-                    dragging = false
-                    unfreezeScrollers()
+                let wasDragging = dragging
+                dragging = false
+                unlockOffsets()
+                if wasDragging {
                     parent.onCancel()
-                } else {
-                    unfreezeScrollers()
                 }
             default:
                 break
@@ -545,16 +552,14 @@ struct DurationResizeBridge: UIViewRepresentable {
         }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard parent.enabled else { return false }
-            let translation = pan.translation(in: nil)
-            return abs(translation.y) >= abs(translation.x)
+            parent.enabled
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            guard parent.enabled else { return false }
+            guard parent.enabled, let scroll = gestureRecognizer.view as? UIScrollView else { return false }
             return CalendarLayout.touchHitsCapsule(
-                windowPoint: touch.location(in: nil),
-                capsuleGlobal: parent.capsuleGlobal
+                CalendarLayout.hourContentPoint(touch: touch, in: scroll),
+                capsule: parent.capsuleInContent
             )
         }
 
@@ -572,29 +577,74 @@ struct DurationResizeBridge: UIViewRepresentable {
             false
         }
 
-        private func freezeScrollers(from view: UIView?) {
-            var found: [UIScrollView] = []
+        func lockOffsets(from view: UIView?) {
+            guard lockedOffsets.isEmpty else { return }
+            var found: [(UIScrollView, CGPoint)] = []
             var current = view
             while let node = current {
                 if let scroll = node as? UIScrollView {
-                    found.append(scroll)
-                    scroll.isScrollEnabled = false
+                    found.append((scroll, scroll.contentOffset))
                 }
                 current = node.superview
             }
-            frozen = found
+            lockedOffsets = found
         }
 
-        private func unfreezeScrollers() {
-            for scroll in frozen {
-                scroll.isScrollEnabled = true
+        func restoreLockedOffsets() {
+            for (scroll, offset) in lockedOffsets where scroll.contentOffset != offset {
+                scroll.setContentOffset(offset, animated: false)
             }
-            frozen = []
+        }
+
+        func unlockOffsets() {
+            restoreLockedOffsets()
+            lockedOffsets = []
         }
     }
 
     final class DurationPanRecognizer: UIPanGestureRecognizer {
+        weak var owner: Coordinator?
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+            super.touchesBegan(touches, with: event)
+            owner?.lockOffsets(from: view)
+            owner?.restoreLockedOffsets()
+        }
+
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+            owner?.restoreLockedOffsets()
+            super.touchesMoved(touches, with: event)
+            owner?.restoreLockedOffsets()
+            // UIScrollView otherwise keeps a sibling pan at `.possible` for the
+            // whole drag (`a0da6ed`): hours stay still and duration never commits.
+            if state == .possible {
+                let delta = translation(in: nil)
+                if abs(delta.y) >= 8 {
+                    state = .began
+                }
+            }
+        }
+
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+            // Fast drag that never left `.possible` until lift still has to
+            // `.began` so `handlePan` writes translation and commits duration.
+            if state == .possible, abs(translation(in: nil).y) >= 8 {
+                state = .began
+            }
+            super.touchesEnded(touches, with: event)
+            if state != .began && state != .changed && state != .ended {
+                owner?.unlockOffsets()
+            }
+        }
+
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+            super.touchesCancelled(touches, with: event)
+            owner?.unlockOffsets()
+        }
+
         override func canPrevent(_ other: UIGestureRecognizer) -> Bool {
+            // Only after `.began`. Always-true while `.possible` blocked the
+            // hour pan from recognizing (`a0da6ed`) without writing duration.
             state == .began || state == .changed
         }
 
@@ -649,11 +699,13 @@ struct DurationResizeBridge: UIViewRepresentable {
         }
 
         private func attach(_ pan: UIPanGestureRecognizer, to scroll: UIScrollView) {
-            if installedOn === scroll, pan.view === scroll { return }
-            pan.view?.removeGestureRecognizer(pan)
-            scroll.addGestureRecognizer(pan)
+            if installedOn !== scroll || pan.view !== scroll {
+                pan.view?.removeGestureRecognizer(pan)
+                scroll.addGestureRecognizer(pan)
+                installedOn = scroll
+            }
+            // Re-apply every update — SwiftUI may replace the scroll pan.
             scroll.panGestureRecognizer.require(toFail: pan)
-            installedOn = scroll
             isUserInteractionEnabled = false
         }
 

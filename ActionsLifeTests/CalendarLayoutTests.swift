@@ -112,6 +112,53 @@ final class CalendarLayoutTests: XCTestCase {
         )
     }
 
+    func testHourContentPointDoesNotDoubleCountOffset() {
+        // Classic UIScrollView: bounds.origin == contentOffset.
+        let classic = CalendarLayout.hourContentPoint(
+            locationInScroll: CGPoint(x: 40, y: 270),
+            contentOffset: CGPoint(x: 0, y: 200),
+            boundsOrigin: CGPoint(x: 0, y: 200)
+        )
+        XCTAssertEqual(classic.x, 40, accuracy: 0.01)
+        XCTAssertEqual(classic.y, 270, accuracy: 0.01)
+        // SwiftUI UIScrollView: bounds.origin stays zero.
+        let swiftUI = CalendarLayout.hourContentPoint(
+            locationInScroll: CGPoint(x: 40, y: 70),
+            contentOffset: CGPoint(x: 0, y: 200),
+            boundsOrigin: .zero
+        )
+        XCTAssertEqual(swiftUI.x, 40, accuracy: 0.01)
+        XCTAssertEqual(swiftUI.y, 270, accuracy: 0.01)
+    }
+
+    func testDurationCapsuleRectIsBottomBandInContentSpace() {
+        let placed = CalendarLayout.placeTimed(
+            [event(time: "03:00", duration: 30)],
+            pixelsPerHour: 50
+        )[0]
+        let capsule = CalendarLayout.durationCapsuleRect(
+            columnIndex: 14,
+            columnWidth: 220,
+            event: placed
+        )
+        XCTAssertEqual(capsule.minX, 14 * 220 + 6, accuracy: 0.01)
+        XCTAssertEqual(capsule.minY, placed.y + 36 - 16, accuracy: 0.01)
+        XCTAssertEqual(capsule.height, 16, accuracy: 0.01)
+        XCTAssertEqual(capsule.width, 220 - 12, accuracy: 0.01)
+        XCTAssertFalse(
+            CalendarLayout.touchHitsCapsule(
+                CGPoint(x: capsule.midX, y: placed.y + 8),
+                capsule: capsule
+            )
+        )
+        XCTAssertTrue(
+            CalendarLayout.touchHitsCapsule(
+                CGPoint(x: capsule.midX, y: capsule.midY),
+                capsule: capsule
+            )
+        )
+    }
+
     func testDurationCapsuleSitsOnCardNotNextHour() {
         // 106 min from midnight is shorter than two hours; the capsule is the
         // card bottom, not a stray overlay on empty hour 2 (`23f0dce`).

@@ -211,28 +211,41 @@ final class DragDropTests: XCTestCase {
         XCTAssertGreaterThan(result?.duration ?? 0, 30)
     }
 
-    func testDurationPanHitsVisibleCapsuleInWindowCoordinates() {
-        // 16pt capsule at the bottom of a 36pt card; the title/body stays tappable.
-        let card = CGRect(x: 60, y: 300, width: 180, height: 36)
-        let capsule = CGRect(x: card.minX, y: card.maxY - 16, width: card.width, height: 16)
+    func testDurationPanHitsVisibleCapsuleNotCardBody() {
+        // 16pt capsule at the bottom of a 36pt card in hour-scroller content space.
+        let event = CalendarLayout.placeTimed(
+            [TaskSnapshot(
+                id: "timed",
+                parentID: "",
+                rootID: "timed",
+                startDateISO: "2026-09-17",
+                orderValue: 1,
+                name: "Event",
+                onList: false,
+                isDone: false,
+                isCollapsed: false,
+                treeISOs: ["2026-09-17"],
+                startTime: "03:00",
+                duration: 30,
+                notes: ""
+            )],
+            pixelsPerHour: 50
+        )[0]
+        let capsule = CalendarLayout.durationCapsuleRect(
+            columnIndex: 14,
+            columnWidth: 220,
+            event: event
+        )
+        XCTAssertEqual(capsule.minY, event.y + 36 - 16, accuracy: 0.01)
         XCTAssertFalse(
-            CalendarLayout.touchHitsCapsule(
-                windowPoint: CGPoint(x: 150, y: card.midY),
-                capsuleGlobal: capsule
-            ),
+            CalendarLayout.touchHitsCapsule(CGPoint(x: capsule.midX, y: event.y + 8), capsule: capsule),
             "card body must not be the duration pan"
         )
         XCTAssertTrue(
-            CalendarLayout.touchHitsCapsule(
-                windowPoint: CGPoint(x: 150, y: capsule.midY),
-                capsuleGlobal: capsule
-            )
+            CalendarLayout.touchHitsCapsule(CGPoint(x: capsule.midX, y: capsule.midY), capsule: capsule)
         )
         XCTAssertFalse(
-            CalendarLayout.touchHitsCapsule(
-                windowPoint: CGPoint(x: 150, y: capsule.midY),
-                capsuleGlobal: .null
-            )
+            CalendarLayout.touchHitsCapsule(CGPoint(x: capsule.midX, y: capsule.midY), capsule: .null)
         )
     }
 

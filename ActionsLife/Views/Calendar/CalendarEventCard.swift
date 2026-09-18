@@ -9,6 +9,7 @@ struct CalendarEventCard: View {
     var onToggleChild: (String) -> Void = { _ in }
     var onDrop: (HomeChrome.DropTarget) -> Void
     var onResizeDuration: (Double) -> Void = { _ in }
+    var capsuleInContent: CGRect = .null
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
@@ -93,7 +94,11 @@ struct CalendarEventCard: View {
         .taskDragLift(id: task.id, name: task.name, duration: task.duration, fromCalendar: true, onDrop: onDrop)
         .overlay(alignment: .bottom) {
             if !compact {
-                DurationEdgeHandle(task: task, onResize: onResizeDuration)
+                DurationEdgeHandle(
+                    task: task,
+                    onResize: onResizeDuration,
+                    capsuleInContent: capsuleInContent
+                )
                     .frame(maxWidth: .infinity)
                     .frame(height: HomeChrome.durationCapsuleHit)
             }
@@ -101,27 +106,19 @@ struct CalendarEventCard: View {
     }
 }
 
-/// Painted capsule on the card. Pan is on the hour scroller, gated by this
-/// bar's window frame (bottom 16pt). Card-body taps still open Details.
+/// Painted capsule on the card. Pan lives on the hour scroller and is gated by
+/// the capsule rect in **scroll content** coordinates (not GeometryReader
+/// global — that frame lagged the visible card). Card-body taps open Details.
 struct DurationEdgeHandle: View {
     let task: TaskSnapshot
     var onResize: (Double) -> Void
+    var capsuleInContent: CGRect
     @Environment(HomeChrome.self) private var chrome
-    @State private var capsuleGlobal: CGRect = .null
 
     var body: some View {
         Color.primary.opacity(0.001)
             .frame(maxWidth: .infinity)
             .frame(height: HomeChrome.durationCapsuleHit)
-            .background {
-                GeometryReader { geo in
-                    Color.clear
-                        .onAppear { capsuleGlobal = geo.frame(in: .global) }
-                        .onChange(of: geo.frame(in: .global)) { _, frame in
-                            capsuleGlobal = frame
-                        }
-                }
-            }
             .overlay(alignment: .bottom) {
                 VStack(spacing: 4) {
                     if chrome.durationResize?.taskID == task.id {
@@ -140,7 +137,7 @@ struct DurationEdgeHandle: View {
                 DurationResizeBridge(
                     enabled: chrome.drag == nil && !chrome.isResizing
                         && (chrome.durationResize == nil || chrome.durationResize?.taskID == task.id),
-                    capsuleGlobal: capsuleGlobal,
+                    capsuleInContent: capsuleInContent,
                     onBegan: beginIfNeeded,
                     onChanged: { chrome.moveDurationResize(deltaY: $0) },
                     onEnded: finishIfNeeded,

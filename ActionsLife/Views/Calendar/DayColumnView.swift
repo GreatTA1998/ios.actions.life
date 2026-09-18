@@ -13,6 +13,7 @@ struct DayColumnView: View {
     var onCancelComposer: () -> Void
     var showsHeader: Bool = true
     var showsTimedCanvas: Bool = true
+    var columnIndex: Int = 0
     @Environment(HomeChrome.self) private var chrome
 
     private var hourHeight: CGFloat { CalendarLayout.hourHeight(pixelsPerHour: pixelsPerHour) }
@@ -108,7 +109,7 @@ struct DayColumnView: View {
             ForEach(placed) { event in
                 // Spacer above the card only — never a canvas-height fill (that
                 // put capsules on empty hours). The duration pan is attached to
-                // the hour scroller using the capsule's window frame.
+                // the hour scroller and hit-tested in content coordinates.
                 VStack(alignment: .leading, spacing: 0) {
                     Color.clear
                         .frame(height: max(0, event.y))
@@ -120,7 +121,12 @@ struct DayColumnView: View {
                         onOpen: { selectedTaskID = event.task.id },
                         onToggleChild: { store.toggleDone($0) },
                         onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) },
-                        onResizeDuration: { store.setDuration(event.task.id, minutes: $0) }
+                        onResizeDuration: { store.setDuration(event.task.id, minutes: $0) },
+                        capsuleInContent: CalendarLayout.durationCapsuleRect(
+                            columnIndex: columnIndex,
+                            columnWidth: columnWidth,
+                            event: event
+                        )
                     )
                     .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
                     .padding(.leading, 6)
