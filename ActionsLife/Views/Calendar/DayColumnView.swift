@@ -120,8 +120,7 @@ struct DayColumnView: View {
                         onToggle: { store.toggleDone(event.task.id) },
                         onOpen: { selectedTaskID = event.task.id },
                         onToggleChild: { store.toggleDone($0) },
-                        onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) },
-                        onResizeDuration: { store.setDuration(event.task.id, minutes: $0) }
+                        onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) }
                     )
                     .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
                     .padding(.leading, 6)

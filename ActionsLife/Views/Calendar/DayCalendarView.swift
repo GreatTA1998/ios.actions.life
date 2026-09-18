@@ -193,8 +193,8 @@ struct DayCalendarView: View {
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
 
-                    // `9678340` baseline: empty-hour tap → timed create; capsule
-                    // pan keeps hours still (`canCancelContentTouches = false`).
+                    // Tap + capsule pan on the hour scroller (`605f886` pan-only
+                    // ate SpatialTap, so empty-hour create went all-day).
                     HourDurationPanBridge(
                         enabled: homeChrome.drag == nil && !homeChrome.isResizing,
                         liveColumns: {
