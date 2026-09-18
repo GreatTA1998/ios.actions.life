@@ -12,35 +12,13 @@ struct CalendarEventCard: View {
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Real UIView under the title (same idea as the 16pt HandleView).
-            // SwiftUI paint is not in the UIKit hit path, so hour-grid SpatialTap
-            // was getting title taps (`e0d3900` composer, not Details).
-            ZStack(alignment: .topLeading) {
-                if !compact {
-                    CardBodyTapBridge {
-                        guard chrome.durationResize == nil, chrome.drag == nil else { return }
-                        onOpen()
-                    }
-                }
+        Group {
+            if compact {
                 cardBody
                     .padding(.horizontal, 8)
-                    .padding(.vertical, compact ? 6 : 8)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                guard !compact, chrome.durationResize == nil, chrome.drag == nil else { return }
-                onOpen()
-            }
-
-            if !compact {
-                DurationEdgeHandle(
-                    task: task,
-                    onResize: onResizeDuration
-                )
-                .frame(maxWidth: .infinity)
-                .frame(height: HomeChrome.durationCapsuleHit)
+                    .padding(.vertical, 6)
+            } else {
+                timedLayout
             }
         }
         .background(Theme.cardFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -60,6 +38,32 @@ struct CalendarEventCard: View {
         }
         .background { DropZoneReporter(kind: .nest(task.id)) }
         .taskDragLift(id: task.id, name: task.name, duration: task.duration, fromCalendar: true, onDrop: onDrop)
+    }
+
+    /// Body UIControl fills the slot above the 16pt capsule (not a 0×0
+    /// ZStack sibling). Painted title overlays it; taps hit the control.
+    private var timedLayout: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            CardBodyTapBridge {
+                guard chrome.durationResize == nil, chrome.drag == nil else { return }
+                onOpen()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .topLeading) {
+                cardBody
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .allowsHitTesting(false)
+            }
+
+            DurationEdgeHandle(
+                task: task,
+                onResize: onResizeDuration
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: HomeChrome.durationCapsuleHit)
+        }
     }
 
     private var cardBody: some View {
@@ -125,9 +129,8 @@ struct CalendarEventCard: View {
     }
 }
 
-/// 16pt layout slot at the bottom of the timed card. HandleView is under the
-/// capsule so the hour grid stays still; touchesMoved translation commits
-/// `setDuration`. Title taps hit `CardBodyTapBridge`, not SpatialTap.
+/// 16pt layout slot at the bottom of the timed card. `UIControl` tracking
+/// commits window finger-Y into `setDuration` (`touchesMoved` never ran).
 struct DurationEdgeHandle: View {
     let task: TaskSnapshot
     var onResize: (Double) -> Void
@@ -137,9 +140,15 @@ struct DurationEdgeHandle: View {
         DurationHandleBridge(
             enabled: chrome.drag == nil && !chrome.isResizing
                 && (chrome.durationResize == nil || chrome.durationResize?.taskID == task.id),
+            startDuration: task.duration,
+            pixelsPerHour: chrome.pixelsPerHour,
+            snap: chrome.snapInterval,
             onBegan: beginIfNeeded,
             onChanged: { chrome.moveDurationResize(deltaY: $0) },
-            onEnded: finishIfNeeded,
+            onCommit: { minutes in
+                chrome.cancelDurationResize()
+                onResize(minutes)
+            },
             onCancel: { chrome.cancelDurationResize() }
         )
         .frame(maxWidth: .infinity)
@@ -167,12 +176,6 @@ struct DurationEdgeHandle: View {
     private func beginIfNeeded() {
         if chrome.durationResize?.taskID != task.id {
             chrome.beginDurationResize(taskID: task.id, duration: task.duration)
-        }
-    }
-
-    private func finishIfNeeded() {
-        if let result = chrome.finishDurationResize() {
-            onResize(result.duration)
         }
     }
 }

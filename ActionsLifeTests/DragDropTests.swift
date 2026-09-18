@@ -195,9 +195,8 @@ final class DragDropTests: XCTestCase {
     }
 
     func testDurationPanDownLengthensBlock() {
-        // Window finger-Y delta (HandleView.touchesMoved) writes this
-        // translation into setDuration so the block end instant actually grows
-        // (`e0d3900` ate the hour scroller but never committed).
+        // UIControl tracking feeds this window finger-Y delta into onCommit →
+        // setDuration (`8225bf8` ate scroll but UIView.touchesMoved never ran).
         let chrome = HomeChrome()
         chrome.pixelsPerHour = 50
         chrome.snapInterval = 15

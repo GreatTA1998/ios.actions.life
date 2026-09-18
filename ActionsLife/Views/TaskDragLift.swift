@@ -532,9 +532,9 @@ struct HourScrollTouchBridge: UIViewRepresentable {
     }
 }
 
-/// UIView filling the timed-card body (above the 16pt capsule). Title taps
-/// must hit this view and open Details — SwiftUI `onTapGesture` lost to
-/// hour-grid SpatialTap (`e0d3900`).
+/// UIControl filling the timed-card body (above the 16pt capsule). A 0×0
+/// `UIView` + `UITapGestureRecognizer` was not the hit target (`8225bf8`);
+/// SpatialTap still opened the composer. `.touchUpInside` opens Details.
 struct CardBodyTapBridge: UIViewRepresentable {
     var onTap: () -> Void
 
@@ -547,7 +547,6 @@ struct CardBodyTapBridge: UIViewRepresentable {
         view.coordinator = context.coordinator
         view.setContentHuggingPriority(.defaultLow, for: .vertical)
         view.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        context.coordinator.attach(to: view)
         return view
     }
 
@@ -557,59 +556,49 @@ struct CardBodyTapBridge: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: TapView, context: Context) -> CGSize? {
-        CGSize(
-            width: proposal.width ?? uiView.bounds.width,
-            height: proposal.height ?? uiView.bounds.height
-        )
+        let size = proposal.replacingUnspecifiedDimensions()
+        return CGSize(width: max(size.width, 0), height: max(size.height, 0))
     }
 
-    final class Coordinator: NSObject {
+    final class Coordinator {
         var onTap: () -> Void
-        let tap = UITapGestureRecognizer()
-
         init(onTap: @escaping () -> Void) {
             self.onTap = onTap
-            super.init()
-            tap.addTarget(self, action: #selector(handleTap))
-            tap.cancelsTouchesInView = true
-        }
-
-        func attach(to view: UIView) {
-            guard tap.view !== view else { return }
-            tap.view?.removeGestureRecognizer(tap)
-            view.addGestureRecognizer(tap)
-        }
-
-        @objc func handleTap() {
-            onTap()
         }
     }
 
-    final class TapView: UIView {
-        weak var coordinator: Coordinator?
+    final class TapView: UIControl {
+        var coordinator: Coordinator?
 
         override init(frame: CGRect) {
             super.init(frame: frame)
             backgroundColor = UIColor.black.withAlphaComponent(0.001)
             isUserInteractionEnabled = true
             isAccessibilityElement = false
+            addTarget(self, action: #selector(tapped), for: .touchUpInside)
         }
 
         @available(*, unavailable)
         required init?(coder: NSCoder) { nil }
+
+        @objc func tapped() {
+            coordinator?.onTap()
+        }
     }
 }
 
-/// 16pt capsule UIView. Scroll stays still because this view is under the
-/// finger (`e0d3900`); duration still must follow the touch. `touchesMoved`
-/// translation is the block's end-instant delta (`setDuration` on end).
-/// Dummy pan exists so the hour scroller must fail it. Never
-/// `isScrollEnabled = false` on touch-down.
+/// 16pt capsule `UIControl`. Hit-testing eats the hour scroller (`8225bf8`)
+/// but `UIView.touchesMoved` never ran. Control tracking + window finger-Y
+/// commit `setDuration` on lift. Pan still `require(toFail:)`s the scroller.
+/// Never `isScrollEnabled = false` on touch-down.
 struct DurationHandleBridge: UIViewRepresentable {
     var enabled: Bool
+    var startDuration: Double
+    var pixelsPerHour: Double
+    var snap: Int
     var onBegan: () -> Void
     var onChanged: (_ translationY: CGFloat) -> Void
-    var onEnded: () -> Void
+    var onCommit: (_ minutes: Double) -> Void
     var onCancel: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -626,6 +615,7 @@ struct DurationHandleBridge: UIViewRepresentable {
     func updateUIView(_ uiView: HandleView, context: Context) {
         context.coordinator.parent = self
         uiView.coordinator = context.coordinator
+        uiView.isEnabled = enabled || context.coordinator.dragging
         if !context.coordinator.dragging {
             context.coordinator.pan.isEnabled = enabled
         }
@@ -642,6 +632,9 @@ struct DurationHandleBridge: UIViewRepresentable {
         private(set) var dragging = false
         private var originY: CGFloat = 0
         private var lastDelta: CGFloat = 0
+        private var startDuration: Double = 30
+        private var pixelsPerHour: Double = 50
+        private var snap: Int = 15
         private var wireToken = 0
 
         init(parent: DurationHandleBridge) {
@@ -668,6 +661,9 @@ struct DurationHandleBridge: UIViewRepresentable {
             dragging = true
             originY = y
             lastDelta = 0
+            startDuration = parent.startDuration
+            pixelsPerHour = parent.pixelsPerHour
+            snap = parent.snap
             parent.onBegan()
         }
 
@@ -681,13 +677,19 @@ struct DurationHandleBridge: UIViewRepresentable {
             guard dragging else { return }
             dragging = false
             parent.onChanged(lastDelta)
-            parent.onEnded()
+            let minutes = CalendarLayout.snapDuration(
+                CalendarLayout.previewDuration(
+                    start: startDuration,
+                    deltaY: lastDelta,
+                    pixelsPerHour: pixelsPerHour
+                ),
+                snap: snap
+            )
+            parent.onCommit(minutes)
         }
 
         func noteCancelled() {
             guard dragging else { return }
-            // SwiftUI rebuild mid-pan cancels the recognizer; still commit so
-            // height grows (`e0d3900` ate scroll but never setDuration).
             if abs(lastDelta) >= 1 {
                 noteEnded()
             } else {
@@ -771,7 +773,7 @@ struct DurationHandleBridge: UIViewRepresentable {
         }
     }
 
-    final class HandleView: UIView {
+    final class HandleView: UIControl {
         weak var coordinator: Coordinator?
 
         override var intrinsicContentSize: CGSize {
@@ -782,7 +784,12 @@ struct DurationHandleBridge: UIViewRepresentable {
             super.init(frame: frame)
             backgroundColor = UIColor.black.withAlphaComponent(0.001)
             isUserInteractionEnabled = true
+            isExclusiveTouch = true
             isAccessibilityElement = false
+            addTarget(self, action: #selector(touchDown(_:forEvent:)), for: .touchDown)
+            addTarget(self, action: #selector(touchDrag(_:forEvent:)), for: [.touchDragInside, .touchDragOutside])
+            addTarget(self, action: #selector(touchUp(_:forEvent:)), for: [.touchUpInside, .touchUpOutside])
+            addTarget(self, action: #selector(touchCancel), for: .touchCancel)
         }
 
         @available(*, unavailable)
@@ -798,28 +805,29 @@ struct DurationHandleBridge: UIViewRepresentable {
             coordinator?.wireHourScroller(from: self)
         }
 
-        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-            super.touchesBegan(touches, with: event)
-            guard let y = touches.first?.location(in: nil).y else { return }
+        private func windowY(from event: UIEvent) -> CGFloat? {
+            event.touches(for: self)?.first?.location(in: nil).y
+                ?? event.allTouches?.first?.location(in: nil).y
+        }
+
+        @objc func touchDown(_ sender: UIControl, forEvent event: UIEvent) {
+            guard let y = windowY(from: event) else { return }
             coordinator?.noteBegan(atY: y)
         }
 
-        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-            super.touchesMoved(touches, with: event)
-            guard let y = touches.first?.location(in: nil).y else { return }
+        @objc func touchDrag(_ sender: UIControl, forEvent event: UIEvent) {
+            guard let y = windowY(from: event) else { return }
             coordinator?.noteChanged(atY: y)
         }
 
-        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-            super.touchesEnded(touches, with: event)
-            if let y = touches.first?.location(in: nil).y {
+        @objc func touchUp(_ sender: UIControl, forEvent event: UIEvent) {
+            if let y = windowY(from: event) {
                 coordinator?.noteChanged(atY: y)
             }
             coordinator?.noteEnded()
         }
 
-        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-            super.touchesCancelled(touches, with: event)
+        @objc func touchCancel() {
             coordinator?.noteCancelled()
         }
     }
