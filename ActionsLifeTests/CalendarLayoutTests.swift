@@ -968,10 +968,9 @@ final class CalendarLayoutTests: XCTestCase {
     }
 
     func testLiveRecognizerFollowCallsSetDurationForPaintedTaskID() {
-        // `82619a9` `testEightyPointHandleFollowGrowsPaintedBlockFrame` is
-        // layout math. The XCUI +80 pt handle drag must go through
-        // `DurationPanRecognizer` → `TaskTreeStore.setDuration` for the
-        // painted card id, using painted hourHeight.
+        // `00f3382` display-link / `touchesMoved` is not the XCUI path.
+        // The +80 pt handle drag claims the hour scroller pan (hours stay).
+        // That same claim/pin follow must call `TaskTreeStore.setDuration`.
         var storeWrites: [(String, Double)] = []
         let pixels = 50.0
         let bridge = HourDurationPanBridge(
@@ -996,8 +995,8 @@ final class CalendarLayoutTests: XCTestCase {
             storeWrites.append((id, minutes))
         }
         XCTAssertTrue(coordinator.hasLiveStoreSetDuration())
-        coordinator.startWindowFollow(taskID: "pr3", startDuration: 30, beganWindowY: 305)
-        coordinator.pan.performLiveWindowFollow(windowY: 305 + 80, ended: false)
+        coordinator.bindClaimedHandleForTest(taskID: "pr3", startDuration: 30, beganWindowY: 344)
+        coordinator.followClaimedHourScroller(windowY: 344 + 80, ended: false)
         XCTAssertEqual(storeWrites.count, 1)
         XCTAssertEqual(storeWrites[0].0, "pr3")
         let minutes = CalendarLayout.paintedHandleMinutes(

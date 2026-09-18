@@ -610,6 +610,10 @@ struct HourDurationPanBridge: UIViewRepresentable {
         /// until `.ended` / `.cancelled`, even +80 pt below the 39pt card.
         fileprivate weak var trackedTouch: UITouch?
         private var followLink: CADisplayLink?
+        /// The claimed hour `UIScrollView` pan — the XCUI +80 pt path
+        /// (`00f3382` `touchesMoved` / display-link never ran).
+        private var observingHourPan = false
+        private weak var observedHourPan: UIPanGestureRecognizer?
 
         init(parent: HourDurationPanBridge) {
             self.parent = parent
@@ -749,9 +753,31 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 capturedTaskID = hit.taskID
                 capturedStartDuration = hit.duration
             }
-            if capturedTaskID != nil {
-                beginFollowing(touch)
+            attachHourPanFollow(to: scroll)
+        }
+
+        /// Claim/pin path: remember the 16pt handle `task.id` so the hour
+        /// scroller pan (the XCUI +80 pt drag) can `setDuration`.
+        func bindClaimedHandle(touch: UITouch?, target: CalendarLayout.DurationCapsuleTarget) {
+            if beganWindowY == nil, let touch {
+                beganWindowY = touch.location(in: touch.window ?? hourScroll).y
             }
+            if capturedTaskID == nil {
+                capturedTaskID = target.taskID
+                capturedStartDuration = target.duration
+            }
+        }
+
+        func bindClaimedHandleForTest(taskID: String, startDuration: Double, beganWindowY: CGFloat) {
+            capturedTaskID = taskID
+            capturedStartDuration = startDuration
+            self.beganWindowY = beganWindowY
+        }
+
+        /// Same write `hourScrollerPanFollowed` uses while the claim pins hours.
+        func followClaimedHourScroller(windowY: CGFloat, ended: Bool) {
+            writeStoreDuration(locationY: windowY, ended: ended)
+            restoreLockedOffsets()
         }
 
         /// XCUITest / unit hook: same path `touchesMoved` uses after the
@@ -774,7 +800,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 beganWindowY = touch.location(in: touch.window ?? hourScroll).y
             }
             if followTaskID() != nil {
-                beginFollowing(touch)
+                attachHourPanFollow(to: hourScroll)
                 return
             }
             guard let scroll = hourScroll else { return }
@@ -787,13 +813,13 @@ struct HourDurationPanBridge: UIViewRepresentable {
             ), case .capsule(let taskID) = painted {
                 capturedTaskID = taskID
                 capturedStartDuration = capsuleTarget(taskID: taskID).duration
-                beginFollowing(touch)
+                attachHourPanFollow(to: scroll)
                 return
             }
             if let hit = pendingHit ?? claimedTarget {
                 capturedTaskID = hit.taskID
                 capturedStartDuration = hit.duration
-                beginFollowing(touch)
+                attachHourPanFollow(to: scroll)
             }
         }
 
@@ -803,6 +829,50 @@ struct HourDurationPanBridge: UIViewRepresentable {
             if let id = pendingHit?.taskID, !id.isEmpty { return id }
             if let id = claimedTarget?.taskID, !id.isEmpty { return id }
             return nil
+        }
+
+        /// Follow the **existing** hour scroller pan (no second UIView).
+        /// That pan is what the XCUI +80 pt handle drag actually drives.
+        func attachHourPanFollow(to scroll: UIScrollView?) {
+            let scroll = scroll ?? hourScroll
+            guard let scroll else { return }
+            hourScroll = scroll
+            let hourPan = scroll.panGestureRecognizer
+            if observingHourPan, observedHourPan === hourPan { return }
+            detachHourPanFollow()
+            hourPan.addTarget(self, action: #selector(hourScrollerPanFollowed(_:)))
+            observedHourPan = hourPan
+            observingHourPan = true
+        }
+
+        func detachHourPanFollow() {
+            observedHourPan?.removeTarget(self, action: #selector(hourScrollerPanFollowed(_:)))
+            observedHourPan = nil
+            observingHourPan = false
+        }
+
+        /// Claim/pin follow: pin hours and write `TaskTreeStore.setDuration`
+        /// from the same hour scroller pan that stays put through +80 pt.
+        @objc func hourScrollerPanFollowed(_ gesture: UIGestureRecognizer) {
+            guard followTaskID() != nil else { return }
+            let y: CGFloat
+            if let pan = gesture as? UIPanGestureRecognizer, let began = beganWindowY {
+                y = began + pan.translation(in: pan.view?.window ?? pan.view).y
+            } else {
+                let space: UIView? = gesture.view?.window ?? gesture.view
+                y = gesture.location(in: space).y
+            }
+            restoreLockedOffsets()
+            switch gesture.state {
+            case .began, .changed:
+                followClaimedHourScroller(windowY: y, ended: false)
+            case .ended:
+                followClaimedHourScroller(windowY: y, ended: true)
+                clearCapsuleCapture()
+                dropClaim()
+            default:
+                restoreLockedOffsets()
+            }
         }
 
         func beginFollowing(_ touch: UITouch) {
@@ -935,6 +1005,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
             capturedTaskID = nil
             beganWindowY = nil
             stopFollowingTouch()
+            detachHourPanFollow()
         }
 
         func durationPanCancelled() {
@@ -945,6 +1016,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
             capturedTaskID = nil
             beganWindowY = nil
             stopFollowingTouch()
+            detachHourPanFollow()
             dropClaim()
             if wasDragging {
                 parent.onCancel()
@@ -979,6 +1051,11 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 if case .capsule(let target) = hit {
                     pendingHit = target
                     claimedTarget = target
+                    bindClaimedHandle(touch: touch, target: target)
+                    lockOffsets(from: scroll)
+                    attachHourPanFollow(to: scroll)
+                    restoreLockedOffsets()
+                    pan.failAfterClaim()
                     return true
                 }
                 pendingHit = nil
@@ -1018,6 +1095,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
             }
             lockedOffsets = found
             savedCancelContentTouches = saved
+            attachHourPanFollow(to: view as? UIScrollView ?? hourScroll)
         }
 
         func restoreLockedOffsets() {
@@ -1053,6 +1131,17 @@ struct HourDurationPanBridge: UIViewRepresentable {
             super.reset()
         }
 
+        /// After the 16pt handle is claimed/pinned, fail so the hour
+        /// scroller pan can deliver the XCUI +80 pt follow.
+        func failAfterClaim() {
+            switch state {
+            case .possible, .began, .changed:
+                state = .failed
+            default:
+                break
+            }
+        }
+
         private func windowY(of touch: UITouch) -> CGFloat {
             let space: UIView? = touch.window ?? view?.window ?? view
             return touch.location(in: space).y
@@ -1070,7 +1159,10 @@ struct HourDurationPanBridge: UIViewRepresentable {
             owner?.captureCapsule(from: scroll, touch: touch)
             owner?.restoreLockedOffsets()
             if owner?.capturedTaskID != nil {
-                state = .began
+                // Claim/pin already holds hours. Fail so the hour scroller
+                // pan — the XCUI +80 pt path — can follow and `setDuration`.
+                // `.began` ate that pan (`00f3382` never wrote the store).
+                state = .failed
             }
         }
 
