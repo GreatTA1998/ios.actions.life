@@ -85,8 +85,8 @@ struct DayColumnView: View {
                     .padding(.horizontal, 6)
                     .zIndex(4)
                 }
-                Color.clear
-                    .frame(height: 18)
+                Color.primary.opacity(0.001)
+                    .frame(height: 28)
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
                     .onTapGesture(perform: beginAllDayComposer)

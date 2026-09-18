@@ -169,12 +169,19 @@ struct ScrollEdgeBridge: UIViewRepresentable {
 /// Jumps the calendar UIScrollView to a content offset (web `jumpToToday`).
 /// Must sit **inside** the scroll content and only walk ancestors — a `.background`
 /// on the ScrollView itself never bound (same miss as the list overlay).
+///
+/// `ScrollView([.horizontal, .vertical])` is often two nested UIScrollViews.
+/// Apply x and y independently on every ancestor that can scroll that axis, then
+/// re-apply for a few frames so SwiftUI cannot reset to the default morning window.
 struct ScrollToOffsetBridge: UIViewRepresentable {
     var offset: CGPoint
     var generation: Int
 
     func makeUIView(context: Context) -> BridgeView {
-        BridgeView()
+        let view = BridgeView()
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        return view
     }
 
     func updateUIView(_ uiView: BridgeView, context: Context) {
@@ -184,52 +191,87 @@ struct ScrollToOffsetBridge: UIViewRepresentable {
 
     final class BridgeView: UIView {
         var target: CGPoint = .zero
-        private var appliedGeneration = -1
+        private var startedGeneration = -1
+        private var token = 0
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if window != nil, startedGeneration == -1 {
+                apply(generation: 0)
+            }
+        }
 
         override func didMoveToSuperview() {
             super.didMoveToSuperview()
-            if appliedGeneration == -1 {
+            if startedGeneration == -1 {
                 apply(generation: 0)
             }
         }
 
         func apply(generation: Int) {
-            guard generation != appliedGeneration else { return }
-            attempt(generation: generation, remaining: 16)
+            // Do not restart while this generation is already retrying — updateUIView
+            // runs every layout and would cancel in-flight setContentOffset.
+            guard generation != startedGeneration else { return }
+            startedGeneration = generation
+            token += 1
+            attempt(generation: generation, token: token, remaining: 28)
         }
 
-        private func attempt(generation: Int, remaining: Int) {
+        private func attempt(generation: Int, token: Int, remaining: Int) {
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                guard let scroll = self.ancestorScrollView() else {
-                    if remaining > 0 { self.attempt(generation: generation, remaining: remaining - 1) }
-                    return
+                guard let self, token == self.token else { return }
+                let scrolls = self.ancestorScrollViews()
+                let ready = scrolls.filter { self.canApply(to: $0) }
+                if !ready.isEmpty {
+                    for scroll in ready {
+                        self.apply(to: scroll)
+                    }
                 }
-                let ready = scroll.contentSize.height > self.target.y + 40
-                    && scroll.bounds.height > 0
-                guard ready else {
-                    if remaining > 0 { self.attempt(generation: generation, remaining: remaining - 1) }
-                    return
+                // Keep writing the offset for a few frames — SwiftUI often overwrites
+                // the first setContentOffset on appear (hours 7–15).
+                if remaining > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
+                        self?.attempt(generation: generation, token: token, remaining: remaining - 1)
+                    }
                 }
-                let maxX = max(0, scroll.contentSize.width - scroll.bounds.width)
-                let maxY = max(0, scroll.contentSize.height - scroll.bounds.height)
-                let next = CGPoint(
-                    x: min(maxX, max(0, self.target.x)),
-                    y: min(maxY, max(0, self.target.y))
-                )
-                scroll.setContentOffset(next, animated: false)
-                self.appliedGeneration = generation
             }
+        }
+
+        private func canApply(to scroll: UIScrollView) -> Bool {
+            guard scroll.bounds.width > 0, scroll.bounds.height > 0 else { return false }
+            let canX = scroll.contentSize.width > scroll.bounds.width + 1
+            let canY = scroll.contentSize.height > scroll.bounds.height + 1
+            if canY { return scroll.contentSize.height > target.y + 20 }
+            return canX
+        }
+
+        private func apply(to scroll: UIScrollView) {
+            let canX = scroll.contentSize.width > scroll.bounds.width + 1
+            let canY = scroll.contentSize.height > scroll.bounds.height + 1
+            var next = scroll.contentOffset
+            if canX {
+                let maxX = max(0, scroll.contentSize.width - scroll.bounds.width)
+                next.x = min(maxX, max(0, target.x))
+            }
+            if canY {
+                let maxY = max(0, scroll.contentSize.height - scroll.bounds.height)
+                next.y = min(maxY, max(0, target.y))
+            }
+            guard next != scroll.contentOffset else { return }
+            scroll.setContentOffset(next, animated: false)
         }
 
         /// Only ancestors. Searching sibling trees grabs the inbox scroller.
-        private func ancestorScrollView() -> UIScrollView? {
+        private func ancestorScrollViews() -> [UIScrollView] {
+            var result: [UIScrollView] = []
             var view: UIView? = superview
             while let current = view {
-                if let scroll = current as? UIScrollView { return scroll }
+                if let scroll = current as? UIScrollView {
+                    result.append(scroll)
+                }
                 view = current.superview
             }
-            return nil
+            return result
         }
     }
 }
@@ -440,7 +482,8 @@ struct HoldThenDragBridge: UIViewRepresentable {
 }
 
 /// Immediate vertical pan on the visible bottom of a timed block (no long-press).
-/// Installs on the host like HoldThenDragBridge — a zero-size UIView overlay never bound.
+/// The representable **is** the 28pt hit target — same pattern as SplitResizeBridge,
+/// which does bind on Simulator. A background installer / long-press overlay did not.
 struct DurationResizeBridge: UIViewRepresentable {
     var enabled: Bool
     var onBegan: () -> Void
@@ -452,26 +495,38 @@ struct DurationResizeBridge: UIViewRepresentable {
         Coordinator(parent: self)
     }
 
-    func makeUIView(context: Context) -> InstallerView {
-        let view = InstallerView()
+    func makeUIView(context: Context) -> HandleView {
+        let view = HandleView()
         view.coordinator = context.coordinator
+        context.coordinator.attach(to: view)
         return view
     }
 
-    func updateUIView(_ uiView: InstallerView, context: Context) {
+    func updateUIView(_ uiView: HandleView, context: Context) {
         context.coordinator.parent = self
-        context.coordinator.pan?.isEnabled = enabled
+        context.coordinator.pan.isEnabled = enabled
         uiView.coordinator = context.coordinator
-        uiView.ensureInstalled()
+        context.coordinator.attach(to: uiView)
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: DurationResizeBridge
-        weak var pan: UIPanGestureRecognizer?
+        let pan = UIPanGestureRecognizer()
         private var dragging = false
 
         init(parent: DurationResizeBridge) {
             self.parent = parent
+            super.init()
+            pan.addTarget(self, action: #selector(handlePan(_:)))
+            pan.delegate = self
+            pan.cancelsTouchesInView = true
+            pan.maximumNumberOfTouches = 1
+        }
+
+        func attach(to view: UIView) {
+            guard pan.view !== view else { return }
+            pan.view?.removeGestureRecognizer(pan)
+            view.addGestureRecognizer(pan)
         }
 
         @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
@@ -499,52 +554,32 @@ struct DurationResizeBridge: UIViewRepresentable {
         }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard parent.enabled, let pan = gestureRecognizer as? UIPanGestureRecognizer else {
-                return parent.enabled
-            }
-            let velocity = pan.velocity(in: pan.view)
-            // Prefer vertical pulls; a mostly-horizontal flick can still scroll the day strip.
-            return abs(velocity.y) >= abs(velocity.x)
+            parent.enabled
         }
 
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
         ) -> Bool {
-            !dragging
+            false
         }
     }
 
-    final class InstallerView: UIView {
+    final class HandleView: UIView {
         weak var coordinator: Coordinator?
-        private weak var installedOn: UIView?
 
-        override func didMoveToSuperview() {
-            super.didMoveToSuperview()
-            ensureInstalled()
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            backgroundColor = .clear
+            isUserInteractionEnabled = true
+            isMultipleTouchEnabled = false
         }
 
-        func ensureInstalled() {
-            guard let coordinator, let host = superview else { return }
-            if installedOn === host, coordinator.pan != nil { return }
-            if let old = coordinator.pan {
-                old.view?.removeGestureRecognizer(old)
-            }
-            let pan = UIPanGestureRecognizer(
-                target: coordinator,
-                action: #selector(Coordinator.handlePan(_:))
-            )
-            pan.delegate = coordinator
-            pan.cancelsTouchesInView = true
-            pan.maximumNumberOfTouches = 1
-            host.addGestureRecognizer(pan)
-            coordinator.pan = pan
-            installedOn = host
-            isUserInteractionEnabled = false
+        override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+            bounds.insetBy(dx: 0, dy: -8).contains(point)
         }
 
-        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-            nil
-        }
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { nil }
     }
 }

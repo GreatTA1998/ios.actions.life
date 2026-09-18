@@ -48,6 +48,10 @@ struct HomeView: View {
                                 },
                                 onMenu: { showMenu = true }
                             )
+                            // GeometryReader is under the status bar; pad so Today + day
+                            // headers are not hidden (hour 7 was flush under 11:15).
+                            .padding(.top, geo.safeAreaInsets.top)
+                            .background(Theme.calendarBackground)
                             .frame(height: max(0, calendarHeight))
                             .clipped()
                             .background {

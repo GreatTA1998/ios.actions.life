@@ -38,7 +38,9 @@ final class HomeChrome {
     /// Bumped every edge-scroll tick so bridges re-apply a steady delta.
     var edgeScrollGeneration: Int = 0
 
-    var pointerCaptured: Bool { isResizing || isLifting || drag != nil || durationResize != nil }
+    /// Duration resize is excluded: flipping `scrollDisabled` mid-pan rebuilds the
+    /// calendar UIScrollView and cancels the handle gesture (height never changes).
+    var pointerCaptured: Bool { isResizing || isLifting || drag != nil }
 
     struct DropZone: Equatable {
         enum Kind: Equatable {

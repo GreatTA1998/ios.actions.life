@@ -83,7 +83,7 @@ struct DayCalendarView: View {
             .offset(x: -scrollOffset.x)
         }
         .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         .clipped()
         .contentShape(Rectangle())
         .background(Theme.calendarBackground)
@@ -92,6 +92,7 @@ struct DayCalendarView: View {
                 .fill(Theme.grid)
                 .frame(height: 1)
         }
+        .zIndex(2)
     }
 
     private var timedPane: some View {
@@ -104,46 +105,39 @@ struct DayCalendarView: View {
     private var timedScroll: some View {
         ScrollViewReader { proxy in
             ScrollView([.horizontal, .vertical], showsIndicators: false) {
-                HStack(alignment: .top, spacing: 0) {
-                    Color.clear.frame(width: CalendarLayout.timeAxisWidth)
-                    ForEach(days, id: \.self) { day in
-                        DayColumnView(
-                            store: store,
-                            day: day,
-                            tasks: store.tasks(on: DateISO.dayString(from: day)),
-                            pixelsPerHour: pixelsPerHour,
-                            columnWidth: columnWidth,
-                            selectedTaskID: $selectedTaskID,
-                            calendarComposer: $calendarComposer,
-                            composerText: $composerText,
-                            onCommitComposer: onCommitComposer,
-                            onCancelComposer: onCancelComposer,
-                            showsHeader: false,
-                            showsTimedCanvas: true
-                        )
-                    }
-                }
-                .overlay(alignment: .topLeading) {
-                    VStack(spacing: 0) {
-                        Color.clear.frame(height: CalendarLayout.nowScrollY(pixelsPerHour: pixelsPerHour))
-                        HStack(spacing: 0) {
-                            Color.clear.frame(
-                                width: CalendarLayout.timeAxisWidth + CGFloat(todayIndex) * columnWidth
+                ZStack(alignment: .topLeading) {
+                    HStack(alignment: .top, spacing: 0) {
+                        Color.clear.frame(width: CalendarLayout.timeAxisWidth)
+                        ForEach(days, id: \.self) { day in
+                            DayColumnView(
+                                store: store,
+                                day: day,
+                                tasks: store.tasks(on: DateISO.dayString(from: day)),
+                                pixelsPerHour: pixelsPerHour,
+                                columnWidth: columnWidth,
+                                selectedTaskID: $selectedTaskID,
+                                calendarComposer: $calendarComposer,
+                                composerText: $composerText,
+                                onCommitComposer: onCommitComposer,
+                                onCancelComposer: onCancelComposer,
+                                showsHeader: false,
+                                showsTimedCanvas: true
                             )
-                            Color.clear
-                                .frame(width: 1, height: 1)
-                                .id("jump-now")
-                            Spacer(minLength: 0)
                         }
-                        Spacer(minLength: 0)
                     }
-                    .allowsHitTesting(false)
-                }
-                .background {
+
+                    jumpNowTarget
+
+                    // Inside the scroll *content* (not ScrollView.background). Walks
+                    // ancestors only and applies x/y onto nested 2-axis scrollers.
                     ScrollToOffsetBridge(offset: nowOffset, generation: nowScrollGeneration)
+                        .frame(width: 1, height: 1)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
             }
             .scrollDisabled(chrome.pointerCaptured)
+            .modifier(TimedScrollDefaults())
             .modifier(ScrollOffsetTracker(offset: $scrollOffset))
             .onAppear { jumpToNow(proxy) }
             .onChange(of: nowScrollGeneration) { _, _ in
@@ -159,6 +153,29 @@ struct DayCalendarView: View {
                 jumpToNow(proxy)
             }
         }
+    }
+
+    /// Layout (not overlay / `.position()`) so ScrollViewReader can find the id.
+    private var jumpNowTarget: some View {
+        VStack(spacing: 0) {
+            Color.clear.frame(height: CalendarLayout.nowScrollY(pixelsPerHour: pixelsPerHour))
+            HStack(spacing: 0) {
+                Color.clear.frame(
+                    width: CalendarLayout.timeAxisWidth + CGFloat(todayIndex) * columnWidth
+                )
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .id("jump-now")
+                Spacer(minLength: 0)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(
+            width: CalendarLayout.timeAxisWidth + CGFloat(days.count) * columnWidth,
+            height: CalendarLayout.canvasHeight(pixelsPerHour: pixelsPerHour)
+        )
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private var stickyTimeAxis: some View {
@@ -201,6 +218,9 @@ struct DayCalendarView: View {
     }
 
     private func expandDayWindowIfNeeded() {
+        // Wait until jump-to-now has moved x off 0 — expanding at x=0 prepends
+        // 14 days and shifts todayIndex, which used to undo the now offset.
+        guard nowScrollGeneration > 0 else { return }
         let column = columnWidth
         guard column > 0 else { return }
         let dayIndex = Int((max(scrollOffset.x, 0) / column).rounded(.down))
@@ -209,6 +229,20 @@ struct DayCalendarView: View {
         }
         if dayIndex >= days.count - 4, futureCount < 180 {
             futureCount += 14
+        }
+    }
+}
+
+/// Pin the 2-axis canvas to top-leading so SwiftUI does not open on a centered
+/// morning window (hours 7–15) before jump-to-now runs.
+private struct TimedScrollDefaults: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content
+                .defaultScrollAnchor(.topLeading)
+                .contentMargins(.zero, for: .scrollContent)
+        } else {
+            content.contentMargins(.zero, for: .scrollContent)
         }
     }
 }

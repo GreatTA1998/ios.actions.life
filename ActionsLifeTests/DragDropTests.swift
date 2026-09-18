@@ -183,7 +183,9 @@ final class DragDropTests: XCTestCase {
         chrome.snapInterval = 15
         XCTAssertFalse(chrome.pointerCaptured)
         chrome.beginDurationResize(taskID: "block", duration: 30)
-        XCTAssertTrue(chrome.pointerCaptured)
+        // Duration pan must not flip scrollDisabled — that rebuild cancels the handle.
+        XCTAssertFalse(chrome.pointerCaptured)
+        XCTAssertEqual(chrome.durationResize?.taskID, "block")
         chrome.moveDurationResize(deltaY: 50)
         let result = chrome.finishDurationResize()
         XCTAssertEqual(result?.taskID, "block")

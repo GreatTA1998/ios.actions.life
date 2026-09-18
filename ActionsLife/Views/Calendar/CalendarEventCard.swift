@@ -96,40 +96,36 @@ struct CalendarEventCard: View {
     }
 
     private var durationHandle: some View {
-        Color.primary.opacity(0.001)
-            .frame(maxWidth: .infinity)
-            .frame(height: HomeChrome.durationHandleHit)
-            .contentShape(Rectangle())
-            .overlay(alignment: .bottom) {
-                VStack(spacing: 4) {
-                    if chrome.durationResize?.taskID == task.id {
-                        Rectangle()
-                            .fill(Theme.dragPreview.opacity(0.85))
-                            .frame(height: 1)
-                    }
-                    Capsule()
-                        .fill(Theme.handle)
-                        .frame(width: 22, height: 3)
-                        .padding(.bottom, 4)
+        DurationResizeBridge(
+            enabled: chrome.drag == nil && !chrome.isResizing
+                && (chrome.durationResize == nil || chrome.durationResize?.taskID == task.id),
+            onBegan: {
+                chrome.beginDurationResize(taskID: task.id, duration: task.duration)
+            },
+            onChanged: { chrome.moveDurationResize(deltaY: $0) },
+            onEnded: {
+                if let result = chrome.finishDurationResize() {
+                    onResizeDuration(result.duration)
                 }
-                .allowsHitTesting(false)
+            },
+            onCancel: { chrome.cancelDurationResize() }
+        )
+        .frame(maxWidth: .infinity)
+        .frame(height: HomeChrome.durationHandleHit)
+        .overlay(alignment: .bottom) {
+            VStack(spacing: 4) {
+                if chrome.durationResize?.taskID == task.id {
+                    Rectangle()
+                        .fill(Theme.dragPreview.opacity(0.85))
+                        .frame(height: 1)
+                }
+                Capsule()
+                    .fill(Theme.handle)
+                    .frame(width: 22, height: 3)
+                    .padding(.bottom, 4)
             }
-            .background {
-                DurationResizeBridge(
-                    enabled: chrome.drag == nil && !chrome.isResizing
-                        && (chrome.durationResize == nil || chrome.durationResize?.taskID == task.id),
-                    onBegan: {
-                        chrome.beginDurationResize(taskID: task.id, duration: task.duration)
-                    },
-                    onChanged: { chrome.moveDurationResize(deltaY: $0) },
-                    onEnded: {
-                        if let result = chrome.finishDurationResize() {
-                            onResizeDuration(result.duration)
-                        }
-                    },
-                    onCancel: { chrome.cancelDurationResize() }
-                )
-            }
-            .accessibilityLabel("Resize duration")
+            .allowsHitTesting(false)
+        }
+        .accessibilityLabel("Resize duration")
     }
 }
