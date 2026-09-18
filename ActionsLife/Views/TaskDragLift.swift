@@ -729,7 +729,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
             if Thread.isMainThread {
                 run()
             } else {
-                DispatchQueue.main.sync(run)
+                DispatchQueue.main.sync(execute: run)
             }
         }
 
