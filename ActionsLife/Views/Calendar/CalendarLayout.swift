@@ -71,8 +71,8 @@ enum CalendarLayout {
 
     /// Timed card in canvas space (6pt leading inset). DayColumnView lays
     /// this out with a top spacer so the painted card matches `event.y`
-    /// (`e2fba41`/`c7a355e`). Do not `Layout.place` a canvas-height host
-    /// over empty hours (`adce52c`).
+    /// (`e2fba41`/`c7a355e`). Duration pan hit-tests the 16pt capsule in
+    /// hour-scroller content space, not a card UIView.
     static func blockFrame(event: PlacedEvent, columnWidth: CGFloat, leading: CGFloat = 6) -> CGRect {
         CGRect(
             x: leading,
@@ -80,19 +80,6 @@ enum CalendarLayout {
             width: max(0, columnWidth - leading * 2),
             height: max(event.height, 36)
         )
-    }
-
-    /// Accessibility IDs on the painted timed card / 16pt capsule. Hour-scroller
-    /// `hitTest` walks these — not `blockFrame` (`54090ed` / `9678340` missed).
-    static let timedCardAccessibilityPrefix = "calendar.timed."
-    static let timedCapsuleAccessibilityPrefix = "calendar.capsule."
-
-    static func timedCardAccessibilityID(_ taskID: String) -> String {
-        timedCardAccessibilityPrefix + taskID
-    }
-
-    static func timedCapsuleAccessibilityID(_ taskID: String) -> String {
-        timedCapsuleAccessibilityPrefix + taskID
     }
 
     /// Hour-grid SpatialTap must ignore only this rect — Y-only matched any event at
@@ -402,120 +389,6 @@ enum CalendarLayout {
             dayISO: column.dayISO,
             minutes: minutes(atY: local.y, pixelsPerHour: pixelsPerHour, snap: snap)
         )
-    }
-
-    /// Empty-hour create only. Never Details / `setDuration` from `blockFrame`
-    /// (`54090ed` / `9678340` missed the painted card).
-    static func emptyHourHit(
-        contentPoint: CGPoint,
-        columns: [HourCanvasColumn],
-        columnWidth: CGFloat,
-        pixelsPerHour: Double,
-        snap: Int
-    ) -> HourCanvasHit? {
-        guard columnWidth > 1, !columns.isEmpty else { return nil }
-        let index = Int(floor(max(contentPoint.x, 0) / columnWidth))
-        guard columns.indices.contains(index) else { return nil }
-        return .emptyHour(
-            dayISO: columns[index].dayISO,
-            minutes: minutes(atY: contentPoint.y, pixelsPerHour: pixelsPerHour, snap: snap)
-        )
-    }
-
-    /// `UIScrollView.hitTest` / content-view `hitTest` at the scroller point.
-    /// Nil and hour-grid views are empty hour; painted card IDs are Details
-    /// or the 16pt capsule.
-    static func hourScrollHitView(in scroll: UIScrollView, locationInScroll: CGPoint) -> UIView? {
-        let canvas = hourCanvasContentView(in: scroll)
-        if canvas !== scroll {
-            let point = scroll.convert(locationInScroll, to: canvas)
-            if let hit = canvas.hitTest(point, with: nil) {
-                return hit
-            }
-        }
-        return scroll.hitTest(locationInScroll, with: nil)
-    }
-
-    enum PaintedCardHit: Equatable {
-        case capsule(taskID: String)
-        case blockBody(taskID: String)
-    }
-
-    /// Classify the `hitTest` view as a **card** only. Spacer / canvas-height
-    /// hosts are not cards (`adce52c` swallowed empty-hour create). Default
-    /// remains scroller empty-hour → timed create.
-    static func paintedCardHit(
-        from view: UIView?,
-        locationInScroll: CGPoint,
-        in scroll: UIScrollView
-    ) -> PaintedCardHit? {
-        var capsuleID: String?
-        var bodyID: String?
-        var bodyView: UIView?
-        var current = view
-        while let node = current {
-            if node is UIScrollView { break }
-            if isHourCanvasHost(node, scroll: scroll) { break }
-            if node.bounds.width < 2 || node.bounds.height < 2 {
-                current = node.superview
-                continue
-            }
-            let local = scroll.convert(locationInScroll, to: node)
-            guard node.bounds.insetBy(dx: -1, dy: -1).contains(local) else {
-                current = node.superview
-                continue
-            }
-            if let id = node.accessibilityIdentifier, !id.isEmpty {
-                if id.hasPrefix(timedCapsuleAccessibilityPrefix), capsuleID == nil {
-                    capsuleID = String(id.dropFirst(timedCapsuleAccessibilityPrefix.count))
-                } else if id.hasPrefix(timedCardAccessibilityPrefix), bodyID == nil {
-                    bodyID = String(id.dropFirst(timedCardAccessibilityPrefix.count))
-                    bodyView = node
-                }
-            }
-            current = node.superview
-        }
-        if let capsuleID, !capsuleID.isEmpty {
-            return .capsule(taskID: capsuleID)
-        }
-        if let bodyID, !bodyID.isEmpty {
-            if let bodyView {
-                let local = scroll.convert(locationInScroll, to: bodyView)
-                if bodyView.bounds.height > 1,
-                   local.y >= bodyView.bounds.height - 16 - 0.5
-                {
-                    return .capsule(taskID: bodyID)
-                }
-            }
-            return .blockBody(taskID: bodyID)
-        }
-        return nil
-    }
-
-    /// Canvas-height / viewport-height views are spacer hosts, not cards.
-    static func isHourCanvasHost(_ view: UIView, scroll: UIScrollView) -> Bool {
-        let height = view.bounds.height
-        let width = view.bounds.width
-        if scroll.contentSize.height > 8, height >= scroll.contentSize.height - 8 {
-            return true
-        }
-        if scroll.bounds.height > 8,
-           height >= scroll.bounds.height - 8,
-           width >= min(scroll.bounds.width, max(scroll.contentSize.width, 1)) - 8
-        {
-            return true
-        }
-        return false
-    }
-
-    static func hourScrollHitIsControl(_ view: UIView?) -> Bool {
-        var current = view
-        while let node = current {
-            if node is UIScrollView { return false }
-            if node is UIControl { return true }
-            current = node.superview
-        }
-        return false
     }
 
     /// Bottom `handle` band of a UIKit view in window space. Zero-size
