@@ -461,288 +461,95 @@ struct HoldThenDragBridge: UIViewRepresentable {
     }
 }
 
-/// Immediate pan on the visible duration capsule (no long-press).
-///
-/// Installed on the hour `UIScrollView` (that view is under the finger).
-/// `shouldReceive` uses the handle **UIView** window frame (not GeometryReader
-/// global — that lagged at `cafff4f`) and content-space math without picking a
-/// SwiftUI canvas subview (`e2fba41` missed the painted capsule). Do **not**
-/// set `isScrollEnabled = false` (`a0da6ed` cancelled the pan). Pin
-/// `contentOffset`, force `.began` after a short vertical move, and write
-/// `translation.y` through `.ended`. Card-body taps still open Details.
-struct DurationResizeBridge: UIViewRepresentable {
-    var enabled: Bool
-    var capsuleInContent: CGRect
-    var onBegan: () -> Void
-    var onChanged: (_ translationY: CGFloat) -> Void
-    var onEnded: () -> Void
-    var onCancel: () -> Void
+/// Pins ancestor `UIScrollView` contentOffsets once a SwiftUI duration drag
+/// is **active**. Never sets `isScrollEnabled = false` on touch-down
+/// (`a0da6ed` cancelled the pan). Does not flip `pointerCaptured` /
+/// `scrollDisabled` (that rebuilds the hour scroller).
+struct ScrollOffsetLockBridge: UIViewRepresentable {
+    var locked: Bool
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
+        Coordinator()
     }
 
-    func makeUIView(context: Context) -> InstallerView {
-        let view = InstallerView()
-        view.coordinator = context.coordinator
-        context.coordinator.handleView = view
+    func makeUIView(context: Context) -> BridgeView {
+        let view = BridgeView()
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        context.coordinator.view = view
         return view
     }
 
-    func updateUIView(_ uiView: InstallerView, context: Context) {
-        context.coordinator.parent = self
-        context.coordinator.handleView = uiView
-        if !context.coordinator.dragging {
-            context.coordinator.pan.isEnabled = enabled
-        }
-        uiView.coordinator = context.coordinator
-        uiView.ensureInstalled()
+    func updateUIView(_ uiView: BridgeView, context: Context) {
+        context.coordinator.view = uiView
+        context.coordinator.setLocked(locked)
     }
 
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var parent: DurationResizeBridge
-        let pan = DurationPanRecognizer()
-        private(set) var dragging = false
-        private var lockedOffsets: [(UIScrollView, CGPoint)] = []
-        weak var handleView: InstallerView?
-
-        init(parent: DurationResizeBridge) {
-            self.parent = parent
-            super.init()
-            pan.owner = self
-            pan.addTarget(self, action: #selector(handlePan(_:)))
-            pan.delegate = self
-            // Capsule-only (`shouldReceive`). Cancelling the scroll view's
-            // remaining touches after `.began` must not apply to card-body taps.
-            pan.cancelsTouchesInView = true
-            pan.maximumNumberOfTouches = 1
-        }
+    final class Coordinator: NSObject {
+        weak var view: BridgeView?
+        private var frozen: [(UIScrollView, CGPoint)] = []
+        private var link: CADisplayLink?
+        private var isLocked = false
 
         deinit {
-            pan.view?.removeGestureRecognizer(pan)
-            unlockOffsets()
+            stopLink()
         }
 
-        @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
-            let deltaY = gesture.translation(in: nil).y
-            switch gesture.state {
-            case .began:
-                dragging = true
-                lockOffsets(from: gesture.view)
-                restoreLockedOffsets()
-                parent.onBegan()
-                parent.onChanged(deltaY)
-            case .changed:
-                guard dragging else { return }
-                restoreLockedOffsets()
-                parent.onChanged(deltaY)
-            case .ended:
-                guard dragging else { return }
-                dragging = false
-                parent.onChanged(deltaY)
-                unlockOffsets()
-                parent.onEnded()
-            case .cancelled, .failed:
-                let wasDragging = dragging
-                dragging = false
-                unlockOffsets()
-                if wasDragging {
-                    parent.onCancel()
+        func setLocked(_ locked: Bool) {
+            if locked {
+                isLocked = true
+                if frozen.isEmpty {
+                    capture()
                 }
-            default:
-                break
+                restore()
+                startLink()
+            } else {
+                isLocked = false
+                stopLink()
+                restore()
+                frozen = []
             }
         }
 
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            parent.enabled
-        }
-
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            guard parent.enabled else { return false }
-            if let handle = handleView, handleHitsCapsule(touch, handle: handle) {
-                return true
-            }
-            guard let scroll = gestureRecognizer.view as? UIScrollView else { return false }
-            return CalendarLayout.touchHitsCapsule(
-                CalendarLayout.hourContentPoint(touch: touch, in: scroll),
-                capsule: parent.capsuleInContent
-            )
-        }
-
-        /// UIKit frame of the 16pt overlay — not SwiftUI GeometryReader.
-        private func handleHitsCapsule(_ touch: UITouch, handle: UIView) -> Bool {
-            guard handle.window != nil else { return false }
-            let host = handle.superview ?? handle
-            let rect = CalendarLayout.durationHandleWindowRect(
-                handleInWindow: handle.convert(handle.bounds, to: nil),
-                hostInWindow: host.convert(host.bounds, to: nil)
-            )
-            return CalendarLayout.touchHitsCapsule(touch.location(in: nil), capsule: rect)
-        }
-
-        func gestureRecognizer(
-            _ gestureRecognizer: UIGestureRecognizer,
-            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
-        ) -> Bool {
-            false
-        }
-
-        func gestureRecognizer(
-            _ gestureRecognizer: UIGestureRecognizer,
-            shouldBeRequiredToFailBy other: UIGestureRecognizer
-        ) -> Bool {
-            false
-        }
-
-        func lockOffsets(from view: UIView?) {
-            guard lockedOffsets.isEmpty else { return }
+        private func capture() {
             var found: [(UIScrollView, CGPoint)] = []
-            var current = view
+            var current: UIView? = view
             while let node = current {
                 if let scroll = node as? UIScrollView {
                     found.append((scroll, scroll.contentOffset))
                 }
                 current = node.superview
             }
-            lockedOffsets = found
+            frozen = found
         }
 
-        func restoreLockedOffsets() {
-            for (scroll, offset) in lockedOffsets where scroll.contentOffset != offset {
+        @objc func tick() {
+            if frozen.isEmpty {
+                capture()
+            }
+            restore()
+        }
+
+        private func restore() {
+            for (scroll, offset) in frozen where scroll.contentOffset != offset {
                 scroll.setContentOffset(offset, animated: false)
             }
         }
 
-        func unlockOffsets() {
-            restoreLockedOffsets()
-            lockedOffsets = []
+        private func startLink() {
+            guard link == nil else { return }
+            let displayLink = CADisplayLink(target: self, selector: #selector(tick))
+            displayLink.add(to: .main, forMode: .common)
+            link = displayLink
+        }
+
+        private func stopLink() {
+            link?.invalidate()
+            link = nil
         }
     }
 
-    final class DurationPanRecognizer: UIPanGestureRecognizer {
-        weak var owner: Coordinator?
-
-        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-            super.touchesBegan(touches, with: event)
-            owner?.lockOffsets(from: view)
-            owner?.restoreLockedOffsets()
-        }
-
-        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
-            owner?.restoreLockedOffsets()
-            super.touchesMoved(touches, with: event)
-            owner?.restoreLockedOffsets()
-            // UIScrollView otherwise keeps a sibling pan at `.possible` for the
-            // whole drag (`a0da6ed`): hours stay still and duration never commits.
-            if state == .possible {
-                let delta = translation(in: nil)
-                if abs(delta.y) >= 8 {
-                    state = .began
-                }
-            }
-        }
-
-        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
-            // Fast drag that never left `.possible` until lift still has to
-            // `.began` so `handlePan` writes translation and commits duration.
-            if state == .possible, abs(translation(in: nil).y) >= 8 {
-                state = .began
-            }
-            super.touchesEnded(touches, with: event)
-            if state != .began && state != .changed && state != .ended {
-                owner?.unlockOffsets()
-            }
-        }
-
-        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
-            super.touchesCancelled(touches, with: event)
-            owner?.unlockOffsets()
-        }
-
-        override func canPrevent(_ other: UIGestureRecognizer) -> Bool {
-            // Only after `.began`. Always-true while `.possible` blocked the
-            // hour pan from recognizing (`a0da6ed`) without writing duration.
-            state == .began || state == .changed
-        }
-
-        override func canBePrevented(by other: UIGestureRecognizer) -> Bool {
-            !(state == .began || state == .changed)
-        }
-
-        override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {
-            false
-        }
-    }
-
-    final class InstallerView: UIView {
-        weak var coordinator: Coordinator?
-        private weak var installedOn: UIScrollView?
-        private var installToken = 0
-
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            ensureInstalled()
-        }
-
-        override func didMoveToSuperview() {
-            super.didMoveToSuperview()
-            ensureInstalled()
-        }
-
-        func ensureInstalled() {
-            guard let coordinator else { return }
-            if let scroll = nearestVerticalScrollView() {
-                attach(coordinator.pan, to: scroll)
-                return
-            }
-            installToken += 1
-            let token = installToken
-            DispatchQueue.main.async { [weak self] in
-                guard let self, token == self.installToken else { return }
-                self.retryInstall(token: token, remaining: 24)
-            }
-        }
-
-        private func retryInstall(token: Int, remaining: Int) {
-            guard token == installToken else { return }
-            if let coordinator, let scroll = nearestVerticalScrollView() {
-                attach(coordinator.pan, to: scroll)
-                return
-            }
-            guard remaining > 0 else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
-                self?.retryInstall(token: token, remaining: remaining - 1)
-            }
-        }
-
-        private func attach(_ pan: UIPanGestureRecognizer, to scroll: UIScrollView) {
-            if installedOn !== scroll || pan.view !== scroll {
-                pan.view?.removeGestureRecognizer(pan)
-                scroll.addGestureRecognizer(pan)
-                installedOn = scroll
-            }
-            // Re-apply every update — SwiftUI may replace the scroll pan.
-            scroll.panGestureRecognizer.require(toFail: pan)
-            isUserInteractionEnabled = false
-        }
-
-        /// Hour scroller — the view that is actually under the finger at the
-        /// visible capsule. Never attach to the SwiftUI hosting slot.
-        private func nearestVerticalScrollView() -> UIScrollView? {
-            var view: UIView? = superview
-            while let current = view {
-                if let scroll = current as? UIScrollView,
-                   scroll.bounds.height > 0,
-                   scroll.contentSize.height > scroll.bounds.height + 1
-                {
-                    return scroll
-                }
-                view = current.superview
-            }
-            return nil
-        }
-
+    final class BridgeView: UIView {
         override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
             nil
         }

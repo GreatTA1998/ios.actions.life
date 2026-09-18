@@ -9,7 +9,6 @@ struct CalendarEventCard: View {
     var onToggleChild: (String) -> Void = { _ in }
     var onDrop: (HomeChrome.DropTarget) -> Void
     var onResizeDuration: (Double) -> Void = { _ in }
-    var capsuleInContent: CGRect = .null
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
@@ -96,28 +95,30 @@ struct CalendarEventCard: View {
             if !compact {
                 DurationEdgeHandle(
                     task: task,
-                    onResize: onResizeDuration,
-                    capsuleInContent: capsuleInContent
+                    onResize: onResizeDuration
                 )
-                    .frame(maxWidth: .infinity)
-                    .frame(height: HomeChrome.durationCapsuleHit)
+                .frame(maxWidth: .infinity)
+                .frame(height: HomeChrome.durationCapsuleHit)
             }
         }
     }
 }
 
-/// Painted capsule on the card. Pan lives on the hour scroller and is gated by
-/// this overlay's UIKit frame (and content-space math). Card-body taps open Details.
+/// Painted 16pt capsule on the timed card. SwiftUI `DragGesture` lives on this
+/// view (the XCUITest finger's SwiftUI hit target), simultaneous with scroll
+/// like web. `translation.height` writes the block end. After the drag is
+/// active, ancestor hour scrollers are offset-pinned — never `isScrollEnabled
+/// = false` on touch-down (`a0da6ed`). Card-body taps still open Details.
 struct DurationEdgeHandle: View {
     let task: TaskSnapshot
     var onResize: (Double) -> Void
-    var capsuleInContent: CGRect
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
         Color.primary.opacity(0.001)
             .frame(maxWidth: .infinity)
             .frame(height: HomeChrome.durationCapsuleHit)
+            .contentShape(Rectangle())
             .overlay(alignment: .bottom) {
                 VStack(spacing: 4) {
                     if chrome.durationResize?.taskID == task.id {
@@ -132,18 +133,24 @@ struct DurationEdgeHandle: View {
                 }
                 .allowsHitTesting(false)
             }
+            .simultaneousGesture(durationDrag)
             .background {
-                DurationResizeBridge(
-                    enabled: chrome.drag == nil && !chrome.isResizing
-                        && (chrome.durationResize == nil || chrome.durationResize?.taskID == task.id),
-                    capsuleInContent: capsuleInContent,
-                    onBegan: beginIfNeeded,
-                    onChanged: { chrome.moveDurationResize(deltaY: $0) },
-                    onEnded: finishIfNeeded,
-                    onCancel: { chrome.cancelDurationResize() }
-                )
+                ScrollOffsetLockBridge(locked: chrome.durationResize?.taskID == task.id)
             }
             .accessibilityLabel("Resize duration")
+    }
+
+    private var durationDrag: some Gesture {
+        DragGesture(minimumDistance: 1)
+            .onChanged { value in
+                guard chrome.drag == nil, !chrome.isResizing else { return }
+                beginIfNeeded()
+                chrome.moveDurationResize(deltaY: value.translation.height)
+            }
+            .onEnded { value in
+                chrome.moveDurationResize(deltaY: value.translation.height)
+                finishIfNeeded()
+            }
     }
 
     private func beginIfNeeded() {
