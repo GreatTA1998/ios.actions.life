@@ -697,18 +697,16 @@ struct HourDurationPanBridge: UIViewRepresentable {
         func captureCapsule(from scroll: UIScrollView?, touch: UITouch) {
             beganWindowY = touch.location(in: touch.window ?? scroll).y
             trackedTouch = touch
-            // Same `calendar.timed.*` UIView Details taps (`28ee931`).
-            // Start only in its bottom 16pt, then follow this UITouch.
+            // 16pt handle only (`28ee931` tap path). Do not bind to the
+            // whole `calendar.timed.*` card / StaticText title.
             if let scroll {
                 let location = touch.location(in: scroll)
-                if let card = CalendarLayout.paintedTimedCard(in: scroll, locationInScroll: location),
-                   CalendarLayout.touchHitsPaintedCapsule(
+                let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: location)
+                if let painted = CalendarLayout.paintedCardHit(
+                    from: view,
                     locationInScroll: location,
-                    card: card,
                     in: scroll
-                   ),
-                   let taskID = CalendarLayout.taskID(fromPaintedView: card)
-                {
+                ), case .capsule(let taskID) = painted {
                     capturedTaskID = taskID
                     capturedStartDuration = capsuleTarget(taskID: taskID).duration
                 }
@@ -718,7 +716,6 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 capturedStartDuration = hit.duration
             }
             if capturedTaskID != nil {
-                dragging = true
                 beginFollowing(touch)
             }
         }
@@ -871,20 +868,8 @@ struct HourDurationPanBridge: UIViewRepresentable {
             }
             if gestureRecognizer === pan {
                 if dragging { return true }
-                let location = touch.location(in: scroll)
-                if let card = CalendarLayout.paintedTimedCard(in: scroll, locationInScroll: location),
-                   CalendarLayout.touchHitsPaintedCapsule(
-                    locationInScroll: location,
-                    card: card,
-                    in: scroll
-                   ),
-                   let taskID = CalendarLayout.taskID(fromPaintedView: card)
-                {
-                    let target = capsuleTarget(taskID: taskID)
-                    pendingHit = target
-                    claimedTarget = target
-                    return true
-                }
+                // Capsule / 16pt handle only — never the title StaticText
+                // (`b8f1337` card-wide claim ate Details).
                 if case .capsule(let target) = hit {
                     pendingHit = target
                     claimedTarget = target
@@ -978,8 +963,6 @@ struct HourDurationPanBridge: UIViewRepresentable {
             owner?.lockOffsets(from: scroll ?? view)
             owner?.captureCapsule(from: scroll, touch: touch)
             owner?.restoreLockedOffsets()
-            // Do not cancel the card's own touches (`cancelsTouchesInView`
-            // cancelled this session at the 16pt edge and froze 35 min).
             if owner?.capturedTaskID != nil {
                 state = .began
             }
@@ -1045,7 +1028,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         override func canBePrevented(by other: UIGestureRecognizer) -> Bool {
-            owner?.dragging != true && owner?.capturedTaskID == nil
+            owner?.dragging != true
         }
 
         override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {

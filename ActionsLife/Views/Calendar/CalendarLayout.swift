@@ -473,9 +473,13 @@ enum CalendarLayout {
                 if id.hasPrefix(timedCardAccessibilityPrefix) {
                     let taskID = String(id.dropFirst(timedCardAccessibilityPrefix.count))
                     if !taskID.isEmpty {
-                        // Card-local bottom 16pt (`94e965c`). Convert-to-scroll
-                        // missed the painted capsule so the pan never claimed
-                        // the touch and hours scrolled (`b52d8de`).
+                        // Title StaticText is ~18pt (`28ee931` /
+                        // `b8f1337`). Bottom 16pt of that view is still
+                        // the title — Details, not duration.
+                        if node.bounds.height < 24 {
+                            return .blockBody(taskID: taskID)
+                        }
+                        // Card-local bottom 16pt handle below the title.
                         if local.y >= node.bounds.height - 16 - 0.5 {
                             return .capsule(taskID: taskID)
                         }
@@ -512,33 +516,6 @@ enum CalendarLayout {
         if scroll.bounds.height > 8, height >= scroll.bounds.height - 8 { return false }
         if scroll.contentSize.height > 8, height >= scroll.contentSize.height - 8 { return false }
         return true
-    }
-
-    /// The painted `calendar.timed.*` card UIView under a scroller point.
-    /// Does not use `hitTest` (the 16pt capsule overlay is not this view).
-    /// Title / empty-hour dispatch still uses `paintedCardHit` / `hourCanvasHit`.
-    static func paintedTimedCard(in scroll: UIScrollView, locationInScroll: CGPoint) -> UIView? {
-        var match: UIView?
-        var stack: [UIView] = [scroll]
-        while let view = stack.popLast() {
-            if view !== scroll,
-               let id = view.accessibilityIdentifier,
-               id.hasPrefix(timedCardAccessibilityPrefix),
-               !isHourCanvasHost(view, scroll: scroll),
-               isPaintedCardSized(view, scroll: scroll)
-            {
-                let local = scroll.convert(locationInScroll, to: view)
-                if view.bounds.insetBy(dx: -1, dy: -1).contains(local) {
-                    // Prefer the card (~39pt), not the StaticText title
-                    // (`28ee931` `(87.3, 319.3, 122.7, 18)` is Details).
-                    if match == nil || view.bounds.height > match!.bounds.height {
-                        match = view
-                    }
-                }
-            }
-            stack.append(contentsOf: view.subviews)
-        }
-        return match
     }
 
     /// Bottom 16pt of the painted card in the scroller's space (`94e965c`

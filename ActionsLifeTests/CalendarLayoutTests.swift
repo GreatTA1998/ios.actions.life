@@ -909,12 +909,12 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(commits.last?.1, CalendarLayout.snapDuration(minutes, snap: 15))
     }
 
-    func testDurationStartsOnPaintedTimedCardBottomSixteenPoints() {
-        // `28ee931` Other card bottom 16pt `(134.0, 340.0)` must bind the
-        // same `calendar.timed.*` UIView Details uses — not a leaf overlay.
+    func testTitleStaticTextIsDetailsNotDurationHandle() {
+        // `b8f1337`: StaticText `calendar.timed.*` `(87.3, 312.7, 122.7, 18)`
+        // must stay Details. Duration is only the 16pt handle below the title.
         let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
         scroll.contentSize = CGSize(width: 390, height: 1200)
-        let card = UIView(frame: CGRect(x: 50, y: 315.3, width: 168, height: 39.3))
+        let card = UIView(frame: CGRect(x: 50, y: 308.7, width: 168, height: 39.3))
         card.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("2860CA86")
         scroll.addSubview(card)
         let title = UIView(frame: CGRect(x: 37.3, y: 4, width: 122.7, height: 18))
@@ -922,24 +922,24 @@ final class CalendarLayoutTests: XCTestCase {
         card.addSubview(title)
         scroll.layoutIfNeeded()
 
-        let capsulePoint = CGPoint(x: 134, y: 340)
-        let found = CalendarLayout.paintedTimedCard(in: scroll, locationInScroll: capsulePoint)
-        XCTAssertTrue(found === card)
-        XCTAssertEqual(CalendarLayout.taskID(fromPaintedView: found), "2860CA86")
-        XCTAssertTrue(
-            CalendarLayout.touchHitsPaintedCapsule(
-                locationInScroll: capsulePoint,
-                card: card,
-                in: scroll
-            )
-        )
-        XCTAssertFalse(
-            CalendarLayout.touchHitsPaintedCapsule(
-                locationInScroll: CGPoint(x: 87.3 + 61, y: 319.3 + 9),
-                card: card,
+        let titlePoint = CGPoint(x: 87.3 + 61, y: 312.7 + 9)
+        XCTAssertEqual(
+            CalendarLayout.paintedCardHit(
+                from: title,
+                locationInScroll: titlePoint,
                 in: scroll
             ),
-            "StaticText title must stay Details"
+            .blockBody(taskID: "2860CA86"),
+            "title StaticText must open Details"
+        )
+        XCTAssertEqual(
+            CalendarLayout.paintedCardHit(
+                from: card,
+                locationInScroll: CGPoint(x: 134, y: 333.3),
+                in: scroll
+            ),
+            .capsule(taskID: "2860CA86"),
+            "16pt handle below the title is duration"
         )
     }
 
