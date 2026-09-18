@@ -69,8 +69,10 @@ enum CalendarLayout {
         y + blockFrameHeight(duration: duration, y: y, pixelsPerHour: pixelsPerHour) - handle
     }
 
-    /// Timed card in canvas space (6pt leading inset). `TimedCardLayout.place`
-    /// puts the card UIView on this frame so `UIScrollView.hitTest` can see it.
+    /// Timed card in canvas space (6pt leading inset). DayColumnView lays
+    /// this out with a top spacer so the painted card matches `event.y`
+    /// (`e2fba41`/`c7a355e`). Do not `Layout.place` a canvas-height host
+    /// over empty hours (`adce52c`).
     static func blockFrame(event: PlacedEvent, columnWidth: CGFloat, leading: CGFloat = 6) -> CGRect {
         CGRect(
             x: leading,
@@ -439,9 +441,9 @@ enum CalendarLayout {
         case blockBody(taskID: String)
     }
 
-    /// Classify the `hitTest` view. Coordinate fallbacks that recompute
-    /// `blockFrame` are forbidden — if this returns nil on a painted card,
-    /// the card UIView is not at the painted pixels (`TimedCardLayout.place`).
+    /// Classify the `hitTest` view as a **card** only. Spacer / canvas-height
+    /// hosts are not cards (`adce52c` swallowed empty-hour create). Default
+    /// remains scroller empty-hour → timed create.
     static func paintedCardHit(
         from view: UIView?,
         locationInScroll: CGPoint,
@@ -453,6 +455,16 @@ enum CalendarLayout {
         var current = view
         while let node = current {
             if node is UIScrollView { break }
+            if isHourCanvasHost(node, scroll: scroll) { break }
+            if node.bounds.width < 2 || node.bounds.height < 2 {
+                current = node.superview
+                continue
+            }
+            let local = scroll.convert(locationInScroll, to: node)
+            guard node.bounds.insetBy(dx: -1, dy: -1).contains(local) else {
+                current = node.superview
+                continue
+            }
             if let id = node.accessibilityIdentifier, !id.isEmpty {
                 if id.hasPrefix(timedCapsuleAccessibilityPrefix), capsuleID == nil {
                     capsuleID = String(id.dropFirst(timedCapsuleAccessibilityPrefix.count))
@@ -478,6 +490,22 @@ enum CalendarLayout {
             return .blockBody(taskID: bodyID)
         }
         return nil
+    }
+
+    /// Canvas-height / viewport-height views are spacer hosts, not cards.
+    static func isHourCanvasHost(_ view: UIView, scroll: UIScrollView) -> Bool {
+        let height = view.bounds.height
+        let width = view.bounds.width
+        if scroll.contentSize.height > 8, height >= scroll.contentSize.height - 8 {
+            return true
+        }
+        if scroll.bounds.height > 8,
+           height >= scroll.bounds.height - 8,
+           width >= min(scroll.bounds.width, max(scroll.contentSize.width, 1)) - 8
+        {
+            return true
+        }
+        return false
     }
 
     static func hourScrollHitIsControl(_ view: UIView?) -> Bool {

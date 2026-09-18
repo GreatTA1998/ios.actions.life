@@ -193,9 +193,8 @@ struct DayCalendarView: View {
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
 
-                    // Tap + capsule pan on the hour scroller. Empty-hour
-                    // `hitTest` (nil / hour grid) keeps timed create. Painted
-                    // card / 16pt capsule come from the same `hitTest`.
+                    // Tap + capsule pan on the hour scroller (`605f886` pan-only
+                    // ate SpatialTap, so empty-hour create went all-day).
                     HourDurationPanBridge(
                         enabled: homeChrome.drag == nil && !homeChrome.isResizing,
                         liveColumns: {

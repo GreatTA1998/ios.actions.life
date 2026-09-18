@@ -536,13 +536,9 @@ struct HourScrollTouchBridge: UIViewRepresentable {
 /// Tap + duration pan on the hour `UIScrollView` — the view under the finger
 /// (`605f886` pan-only stole SpatialTap, so empty-hour create landed in the
 /// all-day header). Empty-hour tap → timed composer (~30 min + 16pt capsule).
-/// Painted card `hitTest` → Details. Capsule `hitTest` → `setDuration`. Keep
-/// `canCancelContentTouches = false` (hours stayed 4–9). Never
-/// `isScrollEnabled = false`. `UIPanGestureRecognizer.touches*` take `UIEvent`.
-///
-/// Do **not** classify the painted card with `blockFrame` (`54090ed` /
-/// `9678340` missed). `UIScrollView.hitTest` / content-view `hitTest` at
-/// the touch. Nil / hour grid keeps empty-hour create.
+/// Default is that `0884a7e` scroller path. Divert only when `hitTest`
+/// returns a **card** (not a spacer/host). Keep
+/// `canCancelContentTouches = false`. Never `isScrollEnabled = false`.
 struct HourDurationPanBridge: UIViewRepresentable {
     var enabled: Bool
     var liveColumns: () -> [CalendarLayout.HourCanvasColumn]
@@ -624,9 +620,6 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 in: scroll,
                 locationInScroll: locationInScroll
             )
-            if CalendarLayout.hourScrollHitIsControl(hitView) {
-                return nil
-            }
             if let painted = CalendarLayout.paintedCardHit(
                 from: hitView,
                 locationInScroll: locationInScroll,
@@ -639,7 +632,8 @@ struct HourDurationPanBridge: UIViewRepresentable {
                     return .capsule(capsuleTarget(taskID: taskID))
                 }
             }
-            return CalendarLayout.emptyHourHit(
+            // Exact `0884a7e` empty-hour path. Default is timed create.
+            return CalendarLayout.hourCanvasHit(
                 contentPoint: CalendarLayout.blockFramePoint(
                     locationInScroll: locationInScroll,
                     scroll: scroll,

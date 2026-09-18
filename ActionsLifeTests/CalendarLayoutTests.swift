@@ -731,6 +731,32 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(hit(CGPoint(x: 100, y: 7 * hourH + 28)), .capsule(taskID: "pr3"))
     }
 
+    func testPaintedCardHitIgnoresFullHeightHost() {
+        // `adce52c` TimedCardLayout hosted a canvas-height view over empty
+        // hours, so hour-7 tap created nothing. A host is not a card.
+        let hourH: CGFloat = 50
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 220, height: 400))
+        let canvas = UIView(frame: CGRect(x: 0, y: 0, width: 220, height: 24 * hourH))
+        scroll.addSubview(canvas)
+        scroll.contentSize = canvas.bounds.size
+        let host = UIView(frame: canvas.bounds)
+        host.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        canvas.addSubview(host)
+        scroll.layoutIfNeeded()
+
+        XCTAssertTrue(CalendarLayout.isHourCanvasHost(host, scroll: scroll))
+        let inScroll = canvas.convert(CGPoint(x: 100, y: 7 * hourH + 8), to: scroll)
+        let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: inScroll)
+        XCTAssertNil(
+            CalendarLayout.paintedCardHit(
+                from: view,
+                locationInScroll: inScroll,
+                in: scroll
+            ),
+            "full-height host must not divert empty-hour create"
+        )
+    }
+
     func testEmptyHourHitNeverUsesBlockFrameForDetails() {
         let placed = CalendarLayout.placeTimed(
             [event(id: "pr3", time: "07:00", duration: 30)],
@@ -770,9 +796,9 @@ final class CalendarLayoutTests: XCTestCase {
         )
     }
 
-    func testTimedCardLayoutFrameIsOnlyPaintedPixels() {
-        // Spacer hosts from hour 0 steal empty-hour hitTest. The placed
-        // card frame must not contain hour 4 when the block is at hour 7.
+    func testBlockFrameIsOnlyPaintedPixelsNotSpacerHost() {
+        // Spacer hosts from hour 0 steal empty-hour hitTest. The card
+        // frame must not contain hour 4 when the block is at hour 7.
         let placed = CalendarLayout.placeTimed(
             [event(id: "pr3", time: "07:00", duration: 30)],
             pixelsPerHour: 50
