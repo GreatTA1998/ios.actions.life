@@ -120,8 +120,7 @@ struct DayColumnView: View {
                         onToggle: { store.toggleDone(event.task.id) },
                         onOpen: { selectedTaskID = event.task.id },
                         onToggleChild: { store.toggleDone($0) },
-                        onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) },
-                        onResizeDuration: { store.setDuration(event.task.id, minutes: $0) }
+                        onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) }
                     )
                     .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
                     .padding(.leading, 6)
@@ -169,11 +168,21 @@ struct DayColumnView: View {
         .gesture(
             SpatialTapGesture().onEnded { event in
                 guard chrome.drag == nil, !chrome.isResizing, chrome.durationResize == nil else { return }
-                // Ignore taps that land on a visible block (or its capsule). Empty hours
-                // must still open the timed composer — do not use a Y-only test.
-                if placed.contains(where: {
+                if let hit = placed.first(where: {
                     CalendarLayout.blockContains(location: event.location, event: $0, columnWidth: columnWidth)
                 }) {
+                    // SpatialTap still receives the title tap (`1fc1511`). Open
+                    // Details instead of no-op/composer — same product as
+                    // `e2fba41` card-body tap. Ignore the 16pt capsule.
+                    let capsule = CalendarLayout.durationCapsuleRect(
+                        columnIndex: 0,
+                        columnWidth: columnWidth,
+                        event: hit
+                    )
+                    if CalendarLayout.touchHitsCapsule(event.location, capsule: capsule) {
+                        return
+                    }
+                    selectedTaskID = hit.task.id
                     return
                 }
                 let minutes = CalendarLayout.minutes(

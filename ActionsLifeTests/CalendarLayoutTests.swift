@@ -155,6 +155,80 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(swiftUI.y, 270, accuracy: 0.01)
     }
 
+    func testHourContentPointAddsParentDayOffsetWhenHourScrollerIsViewportWide() {
+        // Nested 1-axis: hour scroller is viewport-wide; today is column 14.
+        // Finger on the painted 16pt capsule must hit that rect (`e2fba41`
+        // missed capsules at todayIndex × columnWidth).
+        let placed = CalendarLayout.placeTimed(
+            [event(time: "06:00", duration: 30)],
+            pixelsPerHour: 50
+        )[0]
+        let columnWidth: CGFloat = 220
+        let columnIndex = 14
+        let capsule = CalendarLayout.durationCapsuleRect(
+            columnIndex: columnIndex,
+            columnWidth: columnWidth,
+            event: placed
+        )
+        let hourOffsetY: CGFloat = 2 * 50
+        let viewportX = capsule.midX - CGFloat(columnIndex) * columnWidth
+        let viewportY = capsule.midY - hourOffsetY
+        let content = CalendarLayout.hourContentPoint(
+            locationInScroll: CGPoint(x: viewportX, y: viewportY),
+            contentOffset: CGPoint(x: 0, y: hourOffsetY),
+            boundsOrigin: .zero,
+            hourContentWidth: 390,
+            hourBoundsWidth: 390,
+            horizontalContentOffset: CGFloat(columnIndex) * columnWidth
+        )
+        XCTAssertEqual(content.x, capsule.midX, accuracy: 0.01)
+        XCTAssertEqual(content.y, capsule.midY, accuracy: 0.01)
+        let hit = CalendarLayout.hitDurationCapsule(
+            contentPoint: content,
+            capsules: [
+                CalendarLayout.DurationCapsuleTarget(taskID: "timed", duration: 30, rect: capsule)
+            ]
+        )
+        XCTAssertEqual(hit?.taskID, "timed")
+        let title = CalendarLayout.hourContentPoint(
+            locationInScroll: CGPoint(x: viewportX, y: placed.y + 8 - hourOffsetY),
+            contentOffset: CGPoint(x: 0, y: hourOffsetY),
+            boundsOrigin: .zero,
+            hourContentWidth: 390,
+            hourBoundsWidth: 390,
+            horizontalContentOffset: CGFloat(columnIndex) * columnWidth
+        )
+        XCTAssertNil(
+            CalendarLayout.hitDurationCapsule(
+                contentPoint: title,
+                capsules: [
+                    CalendarLayout.DurationCapsuleTarget(taskID: "timed", duration: 30, rect: capsule)
+                ]
+            ),
+            "title / card body must still open Details"
+        )
+        XCTAssertTrue(
+            CalendarLayout.blockContains(
+                location: CGPoint(x: viewportX, y: placed.y + 8),
+                event: placed,
+                columnWidth: columnWidth
+            )
+        )
+    }
+
+    func testHourContentPointDoesNotAddParentOffsetWhenHourContentIsFullWidth() {
+        let point = CalendarLayout.hourContentPoint(
+            locationInScroll: CGPoint(x: 14 * 220 + 40, y: 70),
+            contentOffset: CGPoint(x: 0, y: 200),
+            boundsOrigin: .zero,
+            hourContentWidth: 35 * 220,
+            hourBoundsWidth: 390,
+            horizontalContentOffset: 14 * 220
+        )
+        XCTAssertEqual(point.x, 14 * 220 + 40, accuracy: 0.01)
+        XCTAssertEqual(point.y, 270, accuracy: 0.01)
+    }
+
     func testBlockFrameOriginMatchesPaintedCard() {
         // Spacer layout places the card at this origin (`e2fba41`/`c7a355e`).
         let placed = CalendarLayout.placeTimed(

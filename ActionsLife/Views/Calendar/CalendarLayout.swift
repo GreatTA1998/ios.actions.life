@@ -70,8 +70,9 @@ enum CalendarLayout {
     }
 
     /// Timed card in canvas space (6pt leading inset). DayColumnView lays
-    /// this out with a top spacer so the card and 16pt capsule UIView sit
-    /// on the painted pixels (`e2fba41`/`c7a355e`).
+    /// this out with a top spacer so the painted card matches `event.y`
+    /// (`e2fba41`/`c7a355e`). Duration pan hit-tests the 16pt capsule in
+    /// hour-scroller content space, not a card UIView.
     static func blockFrame(event: PlacedEvent, columnWidth: CGFloat, leading: CGFloat = 6) -> CGRect {
         CGRect(
             x: leading,
@@ -133,13 +134,70 @@ enum CalendarLayout {
     /// Always use offset/bounds math — a SwiftUI content subview is often
     /// viewport-sized, so `location(in: canvas)` misses the painted capsule
     /// (`e2fba41`).
+    ///
+    /// The hour scroller sits inside a horizontal day strip. If its content is
+    /// only viewport-wide, column X lives on the parent (`e2fba41` missed
+    /// capsules at `todayIndex × columnWidth`). Full-width hour content already
+    /// includes that X — do not add the parent offset twice.
     static func hourContentPoint(touch: UITouch, in scroll: UIScrollView) -> CGPoint {
         hourContentPoint(
             locationInScroll: touch.location(in: scroll),
             contentOffset: scroll.contentOffset,
             boundsOrigin: scroll.bounds.origin,
-            adjustedContentInset: scroll.adjustedContentInset
+            adjustedContentInset: scroll.adjustedContentInset,
+            hourContentWidth: scroll.contentSize.width,
+            hourBoundsWidth: scroll.bounds.width,
+            horizontalContentOffset: enclosingHorizontalContentOffset(of: scroll)
         )
+    }
+
+    static func enclosingHorizontalContentOffset(of view: UIView) -> CGFloat {
+        var current: UIView? = view.superview
+        while let node = current {
+            if let parent = node as? UIScrollView,
+               parent.contentSize.width > parent.bounds.width + 1
+            {
+                return parent.contentOffset.x - parent.bounds.origin.x - parent.adjustedContentInset.left
+            }
+            current = node.superview
+        }
+        return 0
+    }
+
+    static func hourContentPoint(
+        locationInScroll: CGPoint,
+        contentOffset: CGPoint,
+        boundsOrigin: CGPoint,
+        adjustedContentInset: UIEdgeInsets = .zero,
+        hourContentWidth: CGFloat,
+        hourBoundsWidth: CGFloat,
+        horizontalContentOffset: CGFloat
+    ) -> CGPoint {
+        var point = hourContentPoint(
+            locationInScroll: locationInScroll,
+            contentOffset: contentOffset,
+            boundsOrigin: boundsOrigin,
+            adjustedContentInset: adjustedContentInset
+        )
+        if hourContentWidth <= hourBoundsWidth + 1 {
+            point.x += horizontalContentOffset
+        }
+        return point
+    }
+
+    /// Painted 16pt capsule in hour-scroller content space, plus the task
+    /// `setDuration` should write when that capsule is under the finger.
+    struct DurationCapsuleTarget: Equatable {
+        var taskID: String
+        var duration: Double
+        var rect: CGRect
+    }
+
+    static func hitDurationCapsule(
+        contentPoint: CGPoint,
+        capsules: [DurationCapsuleTarget]
+    ) -> DurationCapsuleTarget? {
+        capsules.first { touchHitsCapsule(contentPoint, capsule: $0.rect) }
     }
 
     /// Bottom `handle` band of a UIKit view in window space. Zero-size

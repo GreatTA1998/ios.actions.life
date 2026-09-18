@@ -189,6 +189,31 @@ struct DayCalendarView: View {
                         .frame(width: 1, height: 1)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
+
+                    // Pan lives on the hour scroller against painted capsules —
+                    // not a card UIView behind paint (`1fc1511`).
+                    HourDurationPanBridge(
+                        enabled: chrome.drag == nil && !chrome.isResizing,
+                        capsules: durationCapsules,
+                        onBegan: { hit in
+                            chrome.beginDurationResize(taskID: hit.taskID, duration: hit.duration)
+                        },
+                        onChanged: { chrome.moveDurationResize(deltaY: $0) },
+                        onEnded: {
+                            if let result = chrome.finishDurationResize() {
+                                store.setDuration(result.taskID, minutes: result.duration)
+                            }
+                        },
+                        onCancel: { chrome.cancelDurationResize() }
+                    )
+                    .frame(width: 1, height: 1)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+
+                    ScrollOffsetLockBridge(locked: chrome.durationResize != nil)
+                        .frame(width: 1, height: 1)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
             }
             .frame(height: timedHeight)
@@ -207,6 +232,35 @@ struct DayCalendarView: View {
 
     private var days: [Date] {
         CalendarLayout.dayWindow(past: pastCount, future: futureCount, calendar: calendar)
+    }
+
+    /// Painted 16pt capsules in hour-scroller content space (columnIndex ×
+    /// columnWidth). The pan on that scroller hit-tests these, not a card UIView.
+    private var durationCapsules: [CalendarLayout.DurationCapsuleTarget] {
+        days.enumerated().flatMap { index, day -> [CalendarLayout.DurationCapsuleTarget] in
+            let iso = DateISO.dayString(from: day)
+            var timed = CalendarLayout.split(tasks: store.tasks(on: iso)).timed
+            var originals: [String: Double] = [:]
+            for task in timed {
+                originals[task.id] = task.duration
+            }
+            if let session = chrome.durationResize,
+               let slot = timed.firstIndex(where: { $0.id == session.taskID })
+            {
+                timed[slot].duration = session.previewDuration
+            }
+            return CalendarLayout.placeTimed(timed, pixelsPerHour: pixelsPerHour).map { event in
+                CalendarLayout.DurationCapsuleTarget(
+                    taskID: event.task.id,
+                    duration: originals[event.task.id] ?? event.task.duration,
+                    rect: CalendarLayout.durationCapsuleRect(
+                        columnIndex: index,
+                        columnWidth: columnWidth,
+                        event: event
+                    )
+                )
+            }
+        }
     }
 
     private func scrollDays(_ proxy: ScrollViewProxy) {
