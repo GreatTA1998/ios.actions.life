@@ -569,6 +569,11 @@ struct HourDurationPanBridge: UIViewRepresentable {
             context.coordinator.tap.isEnabled = enabled
         }
         uiView.coordinator = context.coordinator
+        // Re-installing mid-drag removes the recognizer and kills
+        // `setDuration` after the first few points (`81d22bb`).
+        if context.coordinator.dragging || context.coordinator.capturedTaskID != nil {
+            return
+        }
         uiView.ensureInstalled()
     }
 
@@ -684,6 +689,15 @@ struct HourDurationPanBridge: UIViewRepresentable {
             commitDuration = parent.onEnded
         }
 
+        func refreshStoreWrites() {
+            bindStoreWrites(from: parent)
+        }
+
+        /// `81d22bb` claimed the scroller but `writeDuration` was nil.
+        func hasLiveSetDurationCallback() -> Bool {
+            writeDuration != nil
+        }
+
         /// minutes = start + (location.y − began.y) / hourHeight * 60.
         func minutesFromBegan(locationY: CGFloat) -> Double {
             let began = beganWindowY ?? locationY
@@ -778,6 +792,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
 
         /// Direct store write from `touchesMoved` / `touchesEnded`.
         func writeStoreDuration(locationY: CGFloat, ended: Bool) {
+            refreshStoreWrites()
             guard let taskID = capturedTaskID, !taskID.isEmpty else { return }
             let liveWrite = writeDuration ?? parent.onChanged
             let liveCommit = commitDuration ?? parent.onEnded
@@ -960,11 +975,15 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 return
             }
             let scroll = owner?.hourScroll
-            owner?.lockOffsets(from: scroll ?? view)
+            owner?.refreshStoreWrites()
             owner?.captureCapsule(from: scroll, touch: touch)
-            owner?.restoreLockedOffsets()
+            // Pin only once we have `task.id` — lock without `setDuration`
+            // is the `81d22bb` byte-identical failure.
             if owner?.capturedTaskID != nil {
+                owner?.lockOffsets(from: scroll ?? view)
+                owner?.restoreLockedOffsets()
                 state = .began
+                owner?.followWindowY(windowY(of: touch), ended: false)
             }
         }
 
@@ -1053,6 +1072,10 @@ struct HourDurationPanBridge: UIViewRepresentable {
 
         func ensureInstalled() {
             guard let coordinator else { return }
+            if coordinator.dragging || coordinator.capturedTaskID != nil {
+                coordinator.refreshStoreWrites()
+                return
+            }
             if let scroll = nearestVerticalScrollView() {
                 attach(coordinator, to: scroll)
                 return
@@ -1078,6 +1101,11 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         private func attach(_ coordinator: Coordinator, to scroll: UIScrollView) {
+            if coordinator.dragging || coordinator.capturedTaskID != nil {
+                coordinator.hourScroll = scroll
+                coordinator.refreshStoreWrites()
+                return
+            }
             let pan = coordinator.pan
             let tap = coordinator.tap
             coordinator.hourScroll = scroll

@@ -893,6 +893,10 @@ final class CalendarLayoutTests: XCTestCase {
         )
         let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
         coordinator.bindStoreWrites(from: bridge)
+        XCTAssertTrue(
+            coordinator.hasLiveSetDurationCallback(),
+            "81d22bb locked the scroller but writeDuration was nil"
+        )
         coordinator.startWindowFollow(taskID: "pr3", startDuration: 30, beganWindowY: beganWindowY)
         // Callback must fire during the 80 pt drag (`e728c7b` / `28ee931`
         // never wrote setDuration for this event after the handle edge).
