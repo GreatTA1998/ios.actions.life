@@ -772,11 +772,8 @@ struct HourDurationPanBridge: UIViewRepresentable {
                     from: view,
                     locationInScroll: location,
                     in: scroll
-                ) {
-                    if case .capsule(let taskID) = painted {
-                        beginDurationSession(taskID: taskID)
-                    }
-                    // `.blockBody` is the title StaticText — Details, not duration.
+                ), case .capsule(let taskID) = painted {
+                    beginDurationSession(taskID: taskID)
                     return
                 }
                 if let window = resolvedWindow(for: touch),
@@ -790,6 +787,8 @@ struct HourDurationPanBridge: UIViewRepresentable {
                     return
                 }
             }
+            // `shouldReceive` already claimed the 16pt handle (`pendingHit`).
+            // Do not drop that id if `paintedCardHit` reports `.blockBody`.
             if let hit = pendingHit ?? claimedTarget {
                 beginDurationSession(taskID: hit.taskID, duration: hit.duration)
             }
@@ -1263,9 +1262,12 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+            // Live XCUI claim path (hours stay → dropClaim on lift):
+            // shouldReceive → lockOffsets → captureCapsule → here.
+            // Write `touch.location(in: touch.window)` vs touch-down Y —
+            // not the pinned hour-pan location (`099543c` delta 0).
             let touch = owner?.trackedTouch ?? touches.first
-            let y = owner?.claimedHourPanWindowY() ?? touch.flatMap { windowY(of: $0) }
-            if let y {
+            if let touch, let y = windowY(of: touch) {
                 owner?.followClaimedHourScroller(windowY: y, ended: true)
             }
             owner?.clearCapsuleCapture()
@@ -1293,8 +1295,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 super.touchesCancelled(touches, with: event)
                 return
             }
-            let y = owner?.claimedHourPanWindowY() ?? touch.flatMap { windowY(of: $0) }
-            if let y, owner?.followTaskID() != nil {
+            if let touch, let y = windowY(of: touch), owner?.followTaskID() != nil {
                 owner?.followClaimedHourScroller(windowY: y, ended: true)
             }
             owner?.clearCapsuleCapture()
