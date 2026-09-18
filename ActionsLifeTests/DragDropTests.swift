@@ -176,4 +176,104 @@ final class DragDropTests: XCTestCase {
         )
         XCTAssertNil(clipped)
     }
+
+    func testHoldDelayMatchesWebLift() {
+        XCTAssertEqual(HomeChrome.holdDelay, 0.15, accuracy: 0.0001)
+        XCTAssertEqual(HomeChrome.touchSlop, 5, accuracy: 0.0001)
+    }
+
+    func testHoldPolicyAcceptsFingerOnRowAndRejectsMisses() {
+        let row = CGRect(x: 12, y: 500, width: 360, height: 44)
+        XCTAssertTrue(
+            HoldThenDragPolicy.shouldReceive(
+                enabled: true,
+                finger: CGPoint(x: 40, y: 520),
+                rowFrame: row
+            )
+        )
+        XCTAssertFalse(
+            HoldThenDragPolicy.shouldReceive(
+                enabled: true,
+                finger: CGPoint(x: 40, y: 20),
+                rowFrame: row
+            )
+        )
+        XCTAssertFalse(
+            HoldThenDragPolicy.shouldReceive(
+                enabled: false,
+                finger: CGPoint(x: 40, y: 520),
+                rowFrame: row
+            )
+        )
+        XCTAssertFalse(
+            HoldThenDragPolicy.shouldReceive(
+                enabled: true,
+                finger: CGPoint(x: 40, y: 520),
+                rowFrame: .zero
+            )
+        )
+    }
+
+    func testHoldDoesNotShareWithPanEvenBeforeLift() {
+        XCTAssertFalse(
+            HoldThenDragPolicy.shouldRecognizeSimultaneously(otherIsPan: true, isDragging: false)
+        )
+        XCTAssertFalse(
+            HoldThenDragPolicy.shouldRecognizeSimultaneously(otherIsPan: true, isDragging: true)
+        )
+        XCTAssertTrue(
+            HoldThenDragPolicy.shouldRecognizeSimultaneously(otherIsPan: false, isDragging: false)
+        )
+        XCTAssertFalse(
+            HoldThenDragPolicy.shouldRecognizeSimultaneously(otherIsPan: false, isDragging: true)
+        )
+    }
+
+    func testPreferredRowFrameIgnoresEmptyRepresentable() {
+        let swiftUI = CGRect(x: 12, y: 500, width: 360, height: 44)
+        XCTAssertEqual(
+            HoldThenDragPolicy.preferredRowFrame(uiKit: .zero, swiftUI: swiftUI),
+            swiftUI
+        )
+        XCTAssertEqual(
+            HoldThenDragPolicy.preferredRowFrame(
+                uiKit: CGRect(x: 12, y: 500, width: 360, height: 44),
+                swiftUI: swiftUI
+            ),
+            CGRect(x: 12, y: 500, width: 360, height: 44)
+        )
+    }
+
+    func testBeginDragLiftsGhostAndCapturesPointer() {
+        let chrome = HomeChrome()
+        let frame = CGRect(x: 10, y: 400, width: 200, height: 44)
+        chrome.beginDrag(
+            taskID: "row",
+            name: "Drag me to the calendar",
+            duration: 30,
+            finger: CGPoint(x: 40, y: 420),
+            frame: frame
+        )
+        XCTAssertEqual(chrome.drag?.taskID, "row")
+        XCTAssertEqual(chrome.drag?.name, "Drag me to the calendar")
+        XCTAssertTrue(chrome.pointerCaptured)
+        XCTAssertTrue(chrome.isLifting)
+        XCTAssertEqual(chrome.ghostTop.x, 10, accuracy: 0.01)
+        XCTAssertEqual(chrome.ghostTop.y, 400, accuracy: 0.01)
+    }
+
+    func testLiftedRowAtListEdgeRequestsAutoscroll() {
+        let chrome = HomeChrome()
+        chrome.calendarPane = CGRect(x: 0, y: 0, width: 400, height: 364)
+        chrome.listPane = CGRect(x: 0, y: 400, width: 400, height: 400)
+        chrome.beginDrag(
+            taskID: "photo",
+            name: "Attach a photo",
+            duration: 15,
+            finger: CGPoint(x: 40, y: 780),
+            frame: CGRect(x: 12, y: 740, width: 360, height: 44)
+        )
+        XCTAssertEqual(chrome.listScrollDelta.height, HomeChrome.edgeStep)
+        XCTAssertGreaterThan(chrome.edgeScrollGeneration, 0)
+    }
 }

@@ -100,4 +100,26 @@ final class TaskTreeStoreTests: XCTestCase {
         XCTAssertEqual(store.inbox.map(\.task.name), ["First", "Second", "Third"])
         XCTAssertEqual(store.inbox[0].children.map(\.task.name), ["Nested later"])
     }
+
+    func testListToCalendarDropCreatesTimedBlock() throws {
+        let container = Persistence.makeContainer(inMemory: true, name: "list-to-cal")
+        let context = ModelContext(container)
+        context.insert(UserProfile(uid: "drop-user"))
+        try context.save()
+
+        let store = TaskTreeStore(context: context, uid: "drop-user")
+        let task = store.create(name: "Drag me to the calendar", onList: true)
+        store.applyDrop(
+            .timed(dayISO: "2026-09-18", minutes: 10 * 60),
+            taskID: task.id,
+            fromCalendar: false
+        )
+
+        XCTAssertEqual(store.task(id: task.id)?.startDateISO, "2026-09-18")
+        XCTAssertEqual(store.task(id: task.id)?.startTime, "10:00")
+        XCTAssertEqual(
+            CalendarLayout.split(tasks: store.tasks(on: "2026-09-18")).timed.map(\.id),
+            [task.id]
+        )
+    }
 }

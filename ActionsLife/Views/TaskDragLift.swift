@@ -3,10 +3,16 @@ import UIKit
 
 /// Hold 150ms (web/Expo) then drag in window coordinates.
 ///
-/// Important: do **not** require UIScrollView pans to fail before this recognizer.
-/// That pattern (shouldBeRequiredToFailBy → pan) permanently breaks scrolling once
-/// SwiftUI rebuilds the hierarchy after a split resize. Instead we coexist with
-/// scroll until the hold fires, then HomeChrome.pointerCaptured disables scroll.
+/// The recognizer is installed on the enclosing `UIScrollView` (an ancestor of
+/// both this `.background` wrapper **and** the SwiftUI row buttons). Installing
+/// on the background host never sees the touch — a still hold never lifts a
+/// ghost, and movement becomes a list scroll.
+///
+/// Do **not** add `shouldBeRequiredToFailBy` → scroll pan. That relationship
+/// leaks across SwiftUI rebuilds after a split resize and freezes both panes.
+/// Exclusive-vs-pan is enough: a flick fails this recognizer via slop, a still
+/// hold begins and the pan cannot share the touch. `pointerCaptured` then
+/// disables scroll for edge autoscroll + calendar drop.
 struct TaskDragLift: ViewModifier {
     let taskID: String
     let name: String
@@ -33,14 +39,15 @@ struct TaskDragLift: ViewModifier {
                     enabled: !chrome.isResizing && (chrome.drag == nil || chrome.drag?.taskID == taskID),
                     holdDelay: HomeChrome.holdDelay,
                     slop: HomeChrome.touchSlop,
+                    rowFrame: frame,
                     isActive: chrome.drag?.taskID == taskID,
-                    onHold: { point in
+                    onHold: { point, rowFrame in
                         chrome.beginDrag(
                             taskID: taskID,
                             name: name,
                             duration: duration,
                             finger: point,
-                            frame: frame,
+                            frame: rowFrame.width > 1 ? rowFrame : frame,
                             fromCalendar: fromCalendar
                         )
                     },
@@ -251,13 +258,42 @@ struct SplitResizeBridge: UIViewRepresentable {
     }
 }
 
-/// Long-press that coexists with scroll until the hold fires.
+/// Pure rules for the UIKit hold-to-drag recognizer. Kept here so tests can lock
+/// the 150ms lift contract without a Simulator.
+enum HoldThenDragPolicy {
+    static func shouldReceive(enabled: Bool, finger: CGPoint, rowFrame: CGRect) -> Bool {
+        guard enabled, rowFrame.width > 1, rowFrame.height > 1 else { return false }
+        return rowFrame.insetBy(dx: -2, dy: -2).contains(finger)
+    }
+
+    /// Never share with a pan. A flick fails this recognizer via slop so the
+    /// scroll pan can begin; a still hold begins and the pan is cancelled.
+    /// Do not add `shouldBeRequiredToFailBy` — that leaks after split resize.
+    static func shouldRecognizeSimultaneously(otherIsPan: Bool, isDragging: Bool) -> Bool {
+        if otherIsPan { return false }
+        return !isDragging
+    }
+
+    /// UIViewRepresentable backgrounds can lay out at 0×0 for a frame; do not
+    /// let that reject a press on the real SwiftUI row.
+    static func preferredRowFrame(uiKit: CGRect, swiftUI: CGRect) -> CGRect {
+        let uiArea = max(0, uiKit.width) * max(0, uiKit.height)
+        let swiftArea = max(0, swiftUI.width) * max(0, swiftUI.height)
+        if uiArea >= swiftArea, uiKit.width > 1, uiKit.height > 1 {
+            return uiKit
+        }
+        return swiftUI
+    }
+}
+
+/// Long-press that lifts a drag ghost after `holdDelay`, then tracks in window space.
 struct HoldThenDragBridge: UIViewRepresentable {
     var enabled: Bool
     var holdDelay: TimeInterval
     var slop: CGFloat
+    var rowFrame: CGRect
     var isActive: Bool
-    var onHold: (CGPoint) -> Void
+    var onHold: (CGPoint, CGRect) -> Void
     var onMove: (CGPoint) -> Void
     var onEnd: () -> Void
     var onCancel: () -> Void
@@ -269,25 +305,46 @@ struct HoldThenDragBridge: UIViewRepresentable {
     func makeUIView(context: Context) -> InstallerView {
         let view = InstallerView()
         view.coordinator = context.coordinator
+        context.coordinator.installer = view
         return view
     }
 
     func updateUIView(_ uiView: InstallerView, context: Context) {
         context.coordinator.parent = self
+        context.coordinator.installer = uiView
+        uiView.coordinator = context.coordinator
         context.coordinator.press?.isEnabled = enabled
         context.coordinator.press?.minimumPressDuration = holdDelay
         context.coordinator.press?.allowableMovement = slop
-        uiView.coordinator = context.coordinator
+        if isActive {
+            context.coordinator.syncDragging(isActive: true)
+        } else {
+            context.coordinator.syncDragging(isActive: false)
+        }
         uiView.ensureInstalled()
+    }
+
+    static func dismantleUIView(_ uiView: InstallerView, coordinator: Coordinator) {
+        uiView.uninstall()
+        coordinator.installer = nil
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: HoldThenDragBridge
         weak var press: UILongPressGestureRecognizer?
-        private var dragging = false
+        weak var installer: InstallerView?
+        private(set) var dragging = false
 
         init(parent: HoldThenDragBridge) {
             self.parent = parent
+        }
+
+        func syncDragging(isActive: Bool) {
+            if isActive {
+                dragging = true
+            } else if press?.state != .began && press?.state != .changed {
+                dragging = false
+            }
         }
 
         @objc func handlePress(_ gesture: UILongPressGestureRecognizer) {
@@ -295,7 +352,8 @@ struct HoldThenDragBridge: UIViewRepresentable {
             switch gesture.state {
             case .began:
                 dragging = true
-                parent.onHold(point)
+                haltEnclosingScroll()
+                parent.onHold(point, resolvedRowFrame())
             case .changed:
                 guard dragging else { return }
                 parent.onMove(point)
@@ -315,16 +373,56 @@ struct HoldThenDragBridge: UIViewRepresentable {
 
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
+            shouldReceive touch: UITouch
+        ) -> Bool {
+            HoldThenDragPolicy.shouldReceive(
+                enabled: parent.enabled,
+                finger: touch.location(in: nil),
+                rowFrame: resolvedRowFrame()
+            )
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
         ) -> Bool {
-            // Before lift: let the scroll pan run (quick flicks must not wait 150ms).
-            // After lift: HomeChrome.scrollDisabled takes over; refuse sharing.
-            if dragging { return false }
-            return true
+            HoldThenDragPolicy.shouldRecognizeSimultaneously(
+                otherIsPan: other is UIPanGestureRecognizer,
+                isDragging: dragging
+            )
         }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            parent.enabled
+            HoldThenDragPolicy.shouldReceive(
+                enabled: parent.enabled,
+                finger: gestureRecognizer.location(in: nil),
+                rowFrame: resolvedRowFrame()
+            )
+        }
+
+        func resolvedRowFrame() -> CGRect {
+            var uiKit = CGRect.zero
+            if let installer, installer.window != nil {
+                uiKit = installer.convert(installer.bounds, to: nil)
+            }
+            return HoldThenDragPolicy.preferredRowFrame(uiKit: uiKit, swiftUI: parent.rowFrame)
+        }
+
+        /// Stop an in-flight pan so a just-lifted ghost is not also a list scroll.
+        private func haltEnclosingScroll() {
+            var view: UIView? = installer
+            while let current = view {
+                if let scroll = current as? UIScrollView {
+                    scroll.setContentOffset(scroll.contentOffset, animated: false)
+                    let pan = scroll.panGestureRecognizer
+                    if pan.state == .began || pan.state == .changed {
+                        pan.isEnabled = false
+                        pan.isEnabled = true
+                    }
+                    return
+                }
+                view = current.superview
+            }
         }
     }
 
@@ -332,29 +430,71 @@ struct HoldThenDragBridge: UIViewRepresentable {
         weak var coordinator: Coordinator?
         private weak var installedOn: UIView?
 
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            ensureInstalled()
+        }
+
         override func didMoveToSuperview() {
             super.didMoveToSuperview()
             ensureInstalled()
         }
 
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            ensureInstalled()
+        }
+
         func ensureInstalled() {
-            guard let coordinator, let host = superview else { return }
-            if installedOn === host, coordinator.press != nil { return }
-            if let old = coordinator.press {
-                old.view?.removeGestureRecognizer(old)
+            guard let coordinator else { return }
+            guard window != nil || superview != nil else {
+                uninstall()
+                return
             }
+            let host = findHost()
+            // Never rip out a recognizer that already lifted — SwiftUI
+            // `scrollDisabled` rebuilds must not cancel an in-flight drag.
+            if coordinator.dragging, coordinator.press != nil { return }
+            if installedOn === host, coordinator.press != nil { return }
+            uninstall()
+            guard let host else { return }
             let press = UILongPressGestureRecognizer(
                 target: coordinator,
                 action: #selector(Coordinator.handlePress(_:))
             )
             press.minimumPressDuration = coordinator.parent.holdDelay
             press.allowableMovement = coordinator.parent.slop
-            press.cancelsTouchesInView = false
+            // Cancel the row tap / context-menu press once we lift so a 150ms
+            // hold shows the ghost instead of opening the task or a menu.
+            press.cancelsTouchesInView = true
             press.delegate = coordinator
             host.addGestureRecognizer(press)
             coordinator.press = press
             installedOn = host
             isUserInteractionEnabled = false
+        }
+
+        func uninstall() {
+            if let press = coordinator?.press {
+                press.view?.removeGestureRecognizer(press)
+            }
+            coordinator?.press = nil
+            installedOn = nil
+        }
+
+        /// Install on the enclosing UIScrollView (ancestor of both the SwiftUI
+        /// buttons and this background wrapper) so the press sees the same
+        /// touches as a row tap / XCUITest press. The `.background` host is a
+        /// sibling of those buttons and never receives them.
+        func findHost() -> UIView? {
+            var view: UIView? = superview
+            while let current = view {
+                if current is UIScrollView { return current }
+                view = current.superview
+            }
+            // Never fall back to the `.background` host — that sibling view
+            // does not receive row-button touches, so a still hold never lifts.
+            return window
         }
 
         override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
