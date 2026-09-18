@@ -51,6 +51,23 @@ enum CalendarLayout {
         }
     }
 
+    /// Card frame height (matches DayColumnView `max(event.height, 36)`).
+    static func blockFrameHeight(duration: Double, y: CGFloat, pixelsPerHour: Double) -> CGFloat {
+        let hourH = hourHeight(pixelsPerHour: pixelsPerHour)
+        let durationHeight = CGFloat(max(duration, 15) / 60) * hourH
+        return max(36, min(max(minimumEventHeight, durationHeight), canvasHeight(pixelsPerHour: pixelsPerHour) - y))
+    }
+
+    /// Top of the 28pt duration edge, in canvas coordinates (layout, not `.position()`).
+    static func durationHandleTop(
+        duration: Double,
+        y: CGFloat,
+        pixelsPerHour: Double,
+        handle: CGFloat = 28
+    ) -> CGFloat {
+        y + blockFrameHeight(duration: duration, y: y, pixelsPerHour: pixelsPerHour) - handle
+    }
+
     static func scrollTargetHour(now: Date = .now, calendar: Calendar = .current) -> Int {
         let hour = calendar.component(.hour, from: now)
         return min(max(hour - 1, startHour), max(endHour - 4, startHour))

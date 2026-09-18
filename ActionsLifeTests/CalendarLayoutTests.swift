@@ -52,6 +52,15 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(CalendarLayout.hourLabel(0), "0")
     }
 
+    func testDurationHandleSitsOnBlockBottomNotPositionSlot() {
+        // 30 min at 50px/hour is below 36pt card floor; handle is the bottom 28pt.
+        let y = CalendarLayout.y(fromMinutes: 22 * 60, pixelsPerHour: 50)
+        XCTAssertEqual(y, 22 * 50, accuracy: 0.01)
+        let top = CalendarLayout.durationHandleTop(duration: 30, y: y, pixelsPerHour: 50, handle: 28)
+        XCTAssertEqual(top, y + 36 - 28, accuracy: 0.01)
+        XCTAssertGreaterThan(top, 21 * 50)
+    }
+
     func testPreviewDurationMatchesWebPixelsPerHour() {
         // 50 px/hour → 1.2 minutes per point; +50pt adds 60 minutes.
         let preview = CalendarLayout.previewDuration(start: 30, deltaY: 50, pixelsPerHour: 50)
