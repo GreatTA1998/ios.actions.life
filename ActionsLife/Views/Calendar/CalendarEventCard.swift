@@ -99,21 +99,28 @@ struct CalendarEventCard: View {
     }
 }
 
-/// 28pt duration edge on the visible card. Layout (not `.offset`) so the
-/// UIKit pan sits on the capsule and can freeze the hour scroller. Do not wrap
-/// this in a canvas-height stack — that painted stray capsules on empty hours.
+/// Visible 28pt capsule on the card. The pan is installed on the hour
+/// UIScrollView and gated by this view's **window** frame — not a UIView
+/// whose layout slot lags `.position` / `.offset` / SwiftUI hosting.
 struct DurationEdgeHandle: View {
     let task: TaskSnapshot
     var onResize: (Double) -> Void
     @Environment(HomeChrome.self) private var chrome
-    @State private var swiftUIDrag = false
-    @State private var startY: CGFloat = 0
+    @State private var capsuleGlobal: CGRect = .null
 
     var body: some View {
         Color.primary.opacity(0.001)
             .frame(maxWidth: .infinity)
             .frame(height: HomeChrome.durationHandleHit)
-            .contentShape(Rectangle())
+            .background {
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { capsuleGlobal = geo.frame(in: .global) }
+                        .onChange(of: geo.frame(in: .global)) { _, frame in
+                            capsuleGlobal = frame
+                        }
+                }
+            }
             .overlay(alignment: .bottom) {
                 VStack(spacing: 4) {
                     if chrome.durationResize?.taskID == task.id {
@@ -128,38 +135,18 @@ struct DurationEdgeHandle: View {
                 }
                 .allowsHitTesting(false)
             }
-            .overlay {
+            .background {
                 DurationResizeBridge(
                     enabled: chrome.drag == nil && !chrome.isResizing
                         && (chrome.durationResize == nil || chrome.durationResize?.taskID == task.id),
+                    capsuleGlobal: capsuleGlobal,
                     onBegan: beginIfNeeded,
                     onChanged: { chrome.moveDurationResize(deltaY: $0) },
                     onEnded: finishIfNeeded,
-                    onCancel: {
-                        swiftUIDrag = false
-                        chrome.cancelDurationResize()
-                    }
+                    onCancel: { chrome.cancelDurationResize() }
                 )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .highPriorityGesture(drag)
             .accessibilityLabel("Resize duration")
-    }
-
-    private var drag: some Gesture {
-        DragGesture(minimumDistance: 1, coordinateSpace: .global)
-            .onChanged { value in
-                guard chrome.drag == nil, !chrome.isResizing else { return }
-                if !swiftUIDrag {
-                    swiftUIDrag = true
-                    startY = value.startLocation.y
-                    beginIfNeeded()
-                }
-                chrome.moveDurationResize(deltaY: value.location.y - startY)
-            }
-            .onEnded { _ in
-                finishIfNeeded()
-            }
     }
 
     private func beginIfNeeded() {
@@ -169,7 +156,6 @@ struct DurationEdgeHandle: View {
     }
 
     private func finishIfNeeded() {
-        swiftUIDrag = false
         if let result = chrome.finishDurationResize() {
             onResize(result.duration)
         }

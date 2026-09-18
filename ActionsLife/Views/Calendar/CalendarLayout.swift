@@ -80,7 +80,7 @@ enum CalendarLayout {
 
     /// Hour-grid SpatialTap must ignore only this rect — Y-only matched any event at
     /// that hour, and full-canvas card wrappers swallowed empty-hour taps (`d94cb61`).
-    /// Bottom/side slop matches `DurationResizeBridge.HandleView.point(inside:)`.
+    /// Bottom/side slop matches the visible capsule hit slop.
     static func blockContains(location: CGPoint, event: PlacedEvent, columnWidth: CGFloat) -> Bool {
         let frame = blockFrame(event: event, columnWidth: columnWidth)
         let hittable = CGRect(
@@ -90,6 +90,22 @@ enum CalendarLayout {
             height: frame.height + 10
         )
         return hittable.contains(location)
+    }
+
+    /// Window-space hit for the visible duration capsule (GeometryReader global
+    /// frame). Do not use a UIView's `convert(bounds:)` — `.position` / `.offset`
+    /// leave that UIView behind the finger.
+    static func touchHitsCapsule(
+        windowPoint: CGPoint,
+        capsuleGlobal: CGRect,
+        slopX: CGFloat = 6,
+        slopY: CGFloat = 10
+    ) -> Bool {
+        guard !capsuleGlobal.isNull, !capsuleGlobal.isInfinite,
+              capsuleGlobal.width > 1, capsuleGlobal.height > 1 else {
+            return false
+        }
+        return capsuleGlobal.insetBy(dx: -slopX, dy: -slopY).contains(windowPoint)
     }
 
     static func scrollTargetHour(now: Date = .now, calendar: Calendar = .current) -> Int {

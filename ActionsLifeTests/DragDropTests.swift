@@ -211,6 +211,29 @@ final class DragDropTests: XCTestCase {
         XCTAssertGreaterThan(result?.duration ?? 0, 30)
     }
 
+    func testDurationPanHitsVisibleCapsuleInWindowCoordinates() {
+        // Finger at the painted capsule, not the pre-position UIView slot.
+        let capsule = CGRect(x: 60, y: 390, width: 180, height: 28)
+        XCTAssertTrue(
+            CalendarLayout.touchHitsCapsule(
+                windowPoint: CGPoint(x: 150, y: 404),
+                capsuleGlobal: capsule
+            )
+        )
+        XCTAssertFalse(
+            CalendarLayout.touchHitsCapsule(
+                windowPoint: CGPoint(x: 150, y: 300),
+                capsuleGlobal: capsule
+            )
+        )
+        XCTAssertFalse(
+            CalendarLayout.touchHitsCapsule(
+                windowPoint: CGPoint(x: 150, y: 404),
+                capsuleGlobal: .null
+            )
+        )
+    }
+
     func testLiftIgnoresDurationHandleBand() {
         XCTAssertEqual(HomeChrome.durationHandleHit, 28)
         let card = CGRect(x: 0, y: 0, width: 200, height: 36)
