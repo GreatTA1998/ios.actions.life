@@ -205,7 +205,9 @@ enum DropMath {
         static let vertical = AxisSet(rawValue: 1 << 1)
     }
 
-    /// Same as the web `getLocalY`: clientY minus the canvas's on-screen top.
+    /// Web `getLocalY`: **finger** (clientY), not ghost-top, minus the canvas
+    /// element's global top. The canvas frame moves with scroll; do not clip it
+    /// to the pane first or hour 9 in a 9–16 viewport maps to ~04:00.
     static func canvasY(globalY: CGFloat, canvasGlobalMinY: CGFloat) -> CGFloat {
         globalY - canvasGlobalMinY
     }
@@ -234,6 +236,10 @@ enum DropMath {
     }
 
     /// Expo `edgeScrollDelta`.
+    ///
+    /// `CGRect.contains` is max-edge exclusive, and XCUITest / a thumb on the
+    /// home indicator often sits on or just past `maxY`. Inflate so a hold on
+    /// the list bottom still autoscrolls instead of hitting a drop slot.
     static func edgeScrollDelta(
         finger: CGPoint,
         viewport: CGRect,
@@ -242,7 +248,7 @@ enum DropMath {
         axes: AxisSet
     ) -> CGSize {
         guard !viewport.isNull, !viewport.isEmpty else { return .zero }
-        guard viewport.contains(finger) else { return .zero }
+        guard viewport.insetBy(dx: -8, dy: -8).contains(finger) else { return .zero }
         var dx: CGFloat = 0
         var dy: CGFloat = 0
         if axes.contains(.vertical) {
@@ -268,13 +274,22 @@ enum DropMath {
         pixelsPerHour: Double,
         snap: Int
     ) -> HomeChrome.DropTarget {
-        let probe = CGRect(x: ghostTop.x, y: ghostTop.y, width: max(ghostSize.width, 8), height: 2)
+        let listProbe = CGRect(x: ghostTop.x, y: ghostTop.y, width: max(ghostSize.width, 8), height: 2)
+        let fingerProbe = CGRect(x: finger.x - 4, y: finger.y - 1, width: 8, height: 2)
         let fingerInCalendar = !calendarPane.isNull && calendarPane.insetBy(dx: 0, dy: -4).contains(finger)
         let fingerInList = !listPane.isNull && listPane.insetBy(dx: 0, dy: -4).contains(finger)
+        let listEdgeScrolling = edgeScrollDelta(
+            finger: finger,
+            viewport: listPane,
+            band: HomeChrome.edgeBand,
+            step: 1,
+            axes: [.vertical]
+        ) != .zero
 
         var nest: HomeChrome.DropZone?
         var listSlot: HomeChrome.DropZone?
         var timed: HomeChrome.DropZone?
+        var timedCanvasMinY: CGFloat?
         var allDay: HomeChrome.DropZone?
         var list: HomeChrome.DropZone?
 
@@ -322,7 +337,14 @@ enum DropMath {
             }
 
             guard let frame = clip(zone.frame, to: pane.isNull ? zone.frame : pane) else { continue }
-            // Inflate 1pt so ghost tops on a pane's bottom edge still count (CGRect is edge-exclusive).
+            let probe: CGRect
+            switch zone.kind {
+            case .timed, .allDay:
+                probe = fingerProbe
+            default:
+                probe = listProbe
+            }
+            // Inflate 1pt so probes on a pane's bottom edge still count (CGRect is edge-exclusive).
             guard frame.insetBy(dx: -1, dy: -1).intersects(probe) else { continue }
 
             switch zone.kind {
@@ -333,6 +355,7 @@ enum DropMath {
                 listSlot = HomeChrome.DropZone(kind: zone.kind, frame: frame)
             case .timed:
                 timed = HomeChrome.DropZone(kind: zone.kind, frame: frame)
+                timedCanvasMinY = zone.frame.minY
             case .allDay:
                 allDay = HomeChrome.DropZone(kind: zone.kind, frame: frame)
             case .list:
@@ -346,13 +369,25 @@ enum DropMath {
                 return .nest(taskID)
             }
             if let timed, case .timed(let dayISO) = timed.kind {
-                let localY = canvasY(globalY: ghostTop.y, canvasGlobalMinY: timed.frame.minY)
-                let minutes = CalendarLayout.minutes(atY: localY, pixelsPerHour: pixelsPerHour, snap: snap)
-                return .timed(dayISO: dayISO, minutes: minutes)
+                return .timed(
+                    dayISO: dayISO,
+                    minutes: timedMinutes(
+                        fingerY: finger.y,
+                        canvasGlobalMinY: timedCanvasMinY ?? timed.frame.minY,
+                        pixelsPerHour: pixelsPerHour,
+                        snap: snap
+                    )
+                )
             }
             if let allDay, case .allDay(let dayISO) = allDay.kind {
                 return .allDay(dayISO)
             }
+        }
+
+        // Holding a lifted row on the list edge autoscrolls; do not treat that
+        // as a slot/nest drop (PR #4 reordered inside TO-DO instead of scrolling).
+        if listEdgeScrolling {
+            return .none
         }
 
         if let nest, case .nest(let taskID) = nest.kind {
@@ -362,9 +397,15 @@ enum DropMath {
             return .listSlot(parentID: parentID, index: index)
         }
         if let timed, case .timed(let dayISO) = timed.kind {
-            let localY = canvasY(globalY: ghostTop.y, canvasGlobalMinY: timed.frame.minY)
-            let minutes = CalendarLayout.minutes(atY: localY, pixelsPerHour: pixelsPerHour, snap: snap)
-            return .timed(dayISO: dayISO, minutes: minutes)
+            return .timed(
+                dayISO: dayISO,
+                minutes: timedMinutes(
+                    fingerY: finger.y,
+                    canvasGlobalMinY: timedCanvasMinY ?? timed.frame.minY,
+                    pixelsPerHour: pixelsPerHour,
+                    snap: snap
+                )
+            )
         }
         if let allDay, case .allDay(let dayISO) = allDay.kind {
             return .allDay(dayISO)
@@ -373,5 +414,15 @@ enum DropMath {
             return .list
         }
         return .none
+    }
+
+    static func timedMinutes(
+        fingerY: CGFloat,
+        canvasGlobalMinY: CGFloat,
+        pixelsPerHour: Double,
+        snap: Int
+    ) -> Int {
+        let localY = canvasY(globalY: fingerY, canvasGlobalMinY: canvasGlobalMinY)
+        return CalendarLayout.minutes(atY: localY, pixelsPerHour: pixelsPerHour, snap: snap)
     }
 }

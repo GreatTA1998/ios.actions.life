@@ -17,11 +17,10 @@ final class DragDropTests: XCTestCase {
             HomeChrome.DropZone(kind: .allDay("2026-09-18"), frame: CGRect(x: 40, y: 0, width: 200, height: 80)),
             HomeChrome.DropZone(kind: .timed("2026-09-18"), frame: CGRect(x: 40, y: 80, width: 200, height: 1200))
         ]
-        // Finger must sit inside the calendar pane; probe uses ghost top (web getLocalY).
-        // Keep ghostTop strictly inside the clipped timed frame (CGRect intersects is edge-exclusive).
+        // Time comes from the finger (web getLocalY), not ghost-top.
         let target = DropMath.target(
-            ghostTop: CGPoint(x: 80, y: 80 + 400),
-            finger: CGPoint(x: 80, y: 500),
+            ghostTop: CGPoint(x: 80, y: 80 + 100),
+            finger: CGPoint(x: 80, y: 80 + 400),
             ghostSize: CGSize(width: 160, height: 40),
             zones: zones,
             draggingID: "task",
@@ -41,8 +40,8 @@ final class DragDropTests: XCTestCase {
             HomeChrome.DropZone(kind: .timed("2026-09-18"), frame: CGRect(x: 40, y: 80, width: 200, height: 1200))
         ]
         let target = DropMath.target(
-            ghostTop: CGPoint(x: 80, y: 80 + 200),
-            finger: CGPoint(x: 80, y: 220),
+            ghostTop: CGPoint(x: 80, y: 80 + 80),
+            finger: CGPoint(x: 80, y: 80 + 200),
             ghostSize: CGSize(width: 160, height: 40),
             zones: zones,
             draggingID: "dragged",
@@ -53,6 +52,38 @@ final class DragDropTests: XCTestCase {
             snap: 15
         )
         XCTAssertEqual(target, .timed(dayISO: "2026-09-18", minutes: 4 * 60))
+    }
+
+    func testTimedDropUsesFingerOnScrolledCanvasNotGhostTop() {
+        // Viewport shows hours 9–16. Canvas hour 0 is above the pane.
+        let hourH: CGFloat = 50
+        let pane = CGRect(x: 0, y: 100, width: 400, height: 400)
+        let canvas = CGRect(x: 40, y: pane.minY - 9 * hourH, width: 200, height: 24 * hourH)
+        let finger = CGPoint(x: 80, y: pane.minY + 2 * hourH) // hour 11
+        let ghostTop = CGPoint(x: 80, y: finger.y - 40)
+        let target = DropMath.target(
+            ghostTop: ghostTop,
+            finger: finger,
+            ghostSize: CGSize(width: 160, height: 44),
+            zones: [HomeChrome.DropZone(kind: .timed("2026-09-18"), frame: canvas)],
+            draggingID: "row",
+            fromCalendar: false,
+            calendarPane: pane,
+            listPane: CGRect(x: 0, y: 520, width: 400, height: 400),
+            pixelsPerHour: 50,
+            snap: 15
+        )
+        XCTAssertEqual(target, .timed(dayISO: "2026-09-18", minutes: 11 * 60))
+        // Clipping the canvas to the pane then using ghost-top would land ~04:00.
+        let clippedOrigin = pane.minY
+        let wrongGhost = DropMath.timedMinutes(
+            fingerY: ghostTop.y,
+            canvasGlobalMinY: clippedOrigin,
+            pixelsPerHour: 50,
+            snap: 5
+        )
+        XCTAssertLessThan(wrongGhost, 6 * 60)
+        XCTAssertNotEqual(wrongGhost, 11 * 60)
     }
 
     func testHeaderDropIsAllDay() {
@@ -148,6 +179,14 @@ final class DragDropTests: XCTestCase {
             axes: [.vertical]
         )
         XCTAssertEqual(down.height, 16)
+        let onMaxEdge = DropMath.edgeScrollDelta(
+            finger: CGPoint(x: 150, y: 500),
+            viewport: viewport,
+            band: 44,
+            step: 16,
+            axes: [.vertical]
+        )
+        XCTAssertEqual(onMaxEdge.height, 16)
         let outside = DropMath.edgeScrollDelta(
             finger: CGPoint(x: 400, y: 110),
             viewport: viewport,
@@ -275,5 +314,25 @@ final class DragDropTests: XCTestCase {
         )
         XCTAssertEqual(chrome.listScrollDelta.height, HomeChrome.edgeStep)
         XCTAssertGreaterThan(chrome.edgeScrollGeneration, 0)
+    }
+
+    func testListEdgeHoldDoesNotReorder() {
+        let listPane = CGRect(x: 0, y: 400, width: 400, height: 400)
+        let target = DropMath.target(
+            ghostTop: CGPoint(x: 40, y: 760),
+            finger: CGPoint(x: 40, y: 780),
+            ghostSize: CGSize(width: 200, height: 36),
+            zones: [
+                HomeChrome.DropZone(kind: .listSlot(parentID: "todo", index: 4), frame: CGRect(x: 12, y: 750, width: 360, height: 40)),
+                HomeChrome.DropZone(kind: .list, frame: listPane)
+            ],
+            draggingID: "photo",
+            fromCalendar: false,
+            calendarPane: CGRect(x: 0, y: 0, width: 400, height: 364),
+            listPane: listPane,
+            pixelsPerHour: 50,
+            snap: 15
+        )
+        XCTAssertEqual(target, .none)
     }
 }

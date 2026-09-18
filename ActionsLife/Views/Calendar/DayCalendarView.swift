@@ -44,6 +44,13 @@ struct DayCalendarView: View {
                         .id(DateISO.dayString(from: day))
                     }
                 }
+                .background {
+                    ScrollEdgeBridge(
+                        delta: chrome.calendarScrollDelta,
+                        generation: chrome.edgeScrollGeneration
+                    )
+                    .allowsHitTesting(false)
+                }
             }
             .scrollDisabled(chrome.pointerCaptured)
             .scrollPosition(id: $scrolledDayID)

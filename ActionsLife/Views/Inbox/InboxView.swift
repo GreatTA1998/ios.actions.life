@@ -36,6 +36,13 @@ struct InboxView: View {
             .padding(.top, 8)
             .padding(.bottom, 28)
             .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background {
+                ScrollEdgeBridge(
+                    delta: chrome.listScrollDelta,
+                    generation: chrome.edgeScrollGeneration
+                )
+                .allowsHitTesting(false)
+            }
         }
         .scrollDisabled(chrome.pointerCaptured)
         .overlay(alignment: .center) {

@@ -119,14 +119,16 @@ struct PaneFrameReporter: View {
     }
 }
 
-/// Applies `delta` to the pane's UIScrollView. Background bridges sit beside the
-/// ScrollView, so we search sibling subtrees — not only ancestors.
+/// Applies `delta` to the enclosing UIScrollView. Must sit *inside* the pane's
+/// ScrollView so ancestor search cannot pick the other pane's scroller.
 struct ScrollEdgeBridge: UIViewRepresentable {
     var delta: CGSize
     var generation: Int
 
     func makeUIView(context: Context) -> BridgeView {
-        BridgeView()
+        let view = BridgeView()
+        view.isUserInteractionEnabled = false
+        return view
     }
 
     func updateUIView(_ uiView: BridgeView, context: Context) {
@@ -136,7 +138,7 @@ struct ScrollEdgeBridge: UIViewRepresentable {
 
     final class BridgeView: UIView {
         func apply(delta: CGSize) {
-            guard let scroll = findPaneScrollView() else { return }
+            guard let scroll = findEnclosingScrollView() else { return }
             let maxX = max(0, scroll.contentSize.width - scroll.bounds.width)
             let maxY = max(0, scroll.contentSize.height - scroll.bounds.height)
             let next = CGPoint(
@@ -144,27 +146,27 @@ struct ScrollEdgeBridge: UIViewRepresentable {
                 y: min(maxY, max(0, scroll.contentOffset.y + delta.height))
             )
             guard next != scroll.contentOffset else { return }
+            // `scrollDisabled` during a lift sets isScrollEnabled = false;
+            // programmatic offset still needs the view briefly enabled.
+            let enabled = scroll.isScrollEnabled
+            scroll.isScrollEnabled = true
             scroll.setContentOffset(next, animated: false)
+            scroll.isScrollEnabled = enabled
         }
 
-        private func findPaneScrollView() -> UIScrollView? {
+        private func findEnclosingScrollView() -> UIScrollView? {
             var child: UIView = self
             var parent = superview
             while let container = parent {
                 if let scroll = container as? UIScrollView { return scroll }
+                // Direct sibling only — do not recurse (that used to pick the
+                // calendar scroller from the home VStack).
                 for sub in container.subviews where sub !== child {
-                    if let found = firstScrollView(in: sub) { return found }
+                    if let scroll = sub as? UIScrollView { return scroll }
                 }
+                if container is UIWindow { break }
                 child = container
                 parent = container.superview
-            }
-            return nil
-        }
-
-        private func firstScrollView(in root: UIView) -> UIScrollView? {
-            if let scroll = root as? UIScrollView { return scroll }
-            for sub in root.subviews {
-                if let found = firstScrollView(in: sub) { return found }
             }
             return nil
         }

@@ -48,12 +48,6 @@ struct HomeView: View {
                             .background {
                                 PaneFrameReporter(pane: .calendar) { chrome.calendarPane = $0 }
                             }
-                            .background {
-                                ScrollEdgeBridge(
-                                    delta: chrome.calendarScrollDelta,
-                                    generation: chrome.edgeScrollGeneration
-                                )
-                            }
 
                             SplitHandle()
                                 .frame(height: handle)
@@ -100,12 +94,6 @@ struct HomeView: View {
                             .clipped()
                             .background {
                                 PaneFrameReporter(pane: .list) { chrome.listPane = $0 }
-                            }
-                            .background {
-                                ScrollEdgeBridge(
-                                    delta: chrome.listScrollDelta,
-                                    generation: chrome.edgeScrollGeneration
-                                )
                             }
                         }
                         .coordinateSpace(name: "homeSplit")
