@@ -8,8 +8,8 @@ Firebase: `project-y-2a061` (named Firestore database `schema-compliant`)
 ## Run
 
 ```bash
-git clone git@github.com:GreatTA1998/actions.life-ios.git
-cd actions.life-ios
+git clone git@github.com:GreatTA1998/ios.actions.life.git
+cd ios.actions.life
 open ActionsLife.xcodeproj
 ```
 
