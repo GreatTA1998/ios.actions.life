@@ -1017,7 +1017,10 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertTrue(coordinator.hasPinnedClaim(), "pin holds through follow writes")
         coordinator.finishClaimedHourPan(windowY: 344 + 80)
         XCTAssertFalse(coordinator.hasPinnedClaim(), "dropClaim() on lift unsticks the hour grid")
-        XCTAssertEqual(storeWrites.last?.1, minutes, accuracy: 0.01)
+        guard let lastMinutes = storeWrites.last?.1 else {
+            return XCTFail("lift must write setDuration")
+        }
+        XCTAssertEqual(lastMinutes, minutes, accuracy: 0.01)
     }
 
     func testTitleStaticTextIsDetailsNotDurationHandle() {
