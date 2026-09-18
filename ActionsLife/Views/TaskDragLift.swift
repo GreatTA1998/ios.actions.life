@@ -166,15 +166,13 @@ struct ScrollEdgeBridge: UIViewRepresentable {
     }
 }
 
-/// Jumps the calendar UIScrollView to a content offset (web `jumpToToday`).
-/// Must sit **inside** the scroll content and only walk ancestors — a `.background`
-/// on the ScrollView itself never bound (same miss as the list overlay).
+/// Jumps the **hour** UIScrollView to `now − 48pt` (web `jumpToToday` y).
 ///
-/// `ScrollView([.horizontal, .vertical])` is often two nested UIScrollViews.
-/// Apply x and y independently on every ancestor that can scroll that axis, then
-/// re-apply for a few frames so SwiftUI cannot reset to the default morning window.
-struct ScrollToOffsetBridge: UIViewRepresentable {
-    var offset: CGPoint
+/// Y only, and only the nearest vertical ancestor. `b956880` wrote
+/// `todayIndex × columnWidth` onto a 2-axis (or parent) scroller and shoved
+/// Today/hours/list to x≈3070.
+struct ScrollToYBridge: UIViewRepresentable {
+    var y: CGFloat
     var generation: Int
 
     func makeUIView(context: Context) -> BridgeView {
@@ -185,12 +183,12 @@ struct ScrollToOffsetBridge: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: BridgeView, context: Context) {
-        uiView.target = offset
+        uiView.targetY = y
         uiView.apply(generation: generation)
     }
 
     final class BridgeView: UIView {
-        var target: CGPoint = .zero
+        var targetY: CGFloat = 0
         private var startedGeneration = -1
         private var token = 0
 
@@ -209,69 +207,51 @@ struct ScrollToOffsetBridge: UIViewRepresentable {
         }
 
         func apply(generation: Int) {
-            // Do not restart while this generation is already retrying — updateUIView
-            // runs every layout and would cancel in-flight setContentOffset.
             guard generation != startedGeneration else { return }
             startedGeneration = generation
             token += 1
-            attempt(generation: generation, token: token, remaining: 28)
+            attempt(token: token, remaining: 24)
         }
 
-        private func attempt(generation: Int, token: Int, remaining: Int) {
+        private func attempt(token: Int, remaining: Int) {
             DispatchQueue.main.async { [weak self] in
                 guard let self, token == self.token else { return }
-                let scrolls = self.ancestorScrollViews()
-                let ready = scrolls.filter { self.canApply(to: $0) }
-                if !ready.isEmpty {
-                    for scroll in ready {
-                        self.apply(to: scroll)
-                    }
+                if let scroll = self.nearestVerticalScrollView() {
+                    self.applyY(to: scroll)
                 }
-                // Keep writing the offset for a few frames — SwiftUI often overwrites
-                // the first setContentOffset on appear (hours 7–15).
                 if remaining > 0 {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
-                        self?.attempt(generation: generation, token: token, remaining: remaining - 1)
+                        self?.attempt(token: token, remaining: remaining - 1)
                     }
                 }
             }
         }
 
-        private func canApply(to scroll: UIScrollView) -> Bool {
-            guard scroll.bounds.width > 0, scroll.bounds.height > 0 else { return false }
-            let canX = scroll.contentSize.width > scroll.bounds.width + 1
-            let canY = scroll.contentSize.height > scroll.bounds.height + 1
-            if canY { return scroll.contentSize.height > target.y + 20 }
-            return canX
+        private func applyY(to scroll: UIScrollView) {
+            let maxY = max(0, scroll.contentSize.height - scroll.bounds.height)
+            let nextY = min(maxY, max(0, targetY))
+            guard abs(scroll.contentOffset.y - nextY) > 0.5 else { return }
+            scroll.setContentOffset(
+                CGPoint(x: scroll.contentOffset.x, y: nextY),
+                animated: false
+            )
         }
 
-        private func apply(to scroll: UIScrollView) {
-            let canX = scroll.contentSize.width > scroll.bounds.width + 1
-            let canY = scroll.contentSize.height > scroll.bounds.height + 1
-            var next = scroll.contentOffset
-            if canX {
-                let maxX = max(0, scroll.contentSize.width - scroll.bounds.width)
-                next.x = min(maxX, max(0, target.x))
-            }
-            if canY {
-                let maxY = max(0, scroll.contentSize.height - scroll.bounds.height)
-                next.y = min(maxY, max(0, target.y))
-            }
-            guard next != scroll.contentOffset else { return }
-            scroll.setContentOffset(next, animated: false)
-        }
-
-        /// Only ancestors. Searching sibling trees grabs the inbox scroller.
-        private func ancestorScrollViews() -> [UIScrollView] {
-            var result: [UIScrollView] = []
+        /// First ancestor that actually scrolls vertically. Never write X.
+        /// Never walk into a parent just because it is also a UIScrollView.
+        private func nearestVerticalScrollView() -> UIScrollView? {
             var view: UIView? = superview
             while let current = view {
-                if let scroll = current as? UIScrollView {
-                    result.append(scroll)
+                if let scroll = current as? UIScrollView,
+                   scroll.bounds.height > 0,
+                   scroll.contentSize.height > scroll.bounds.height + 1,
+                   scroll.contentSize.height > targetY + 20
+                {
+                    return scroll
                 }
                 view = current.superview
             }
-            return result
+            return nil
         }
     }
 }

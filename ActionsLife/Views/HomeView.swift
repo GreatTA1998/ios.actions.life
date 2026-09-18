@@ -52,6 +52,7 @@ struct HomeView: View {
                             // headers are not hidden (hour 7 was flush under 11:15).
                             .padding(.top, geo.safeAreaInsets.top)
                             .background(Theme.calendarBackground)
+                            .frame(maxWidth: .infinity)
                             .frame(height: max(0, calendarHeight))
                             .clipped()
                             .background {

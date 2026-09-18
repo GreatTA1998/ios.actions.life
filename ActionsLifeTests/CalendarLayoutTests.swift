@@ -93,8 +93,17 @@ final class CalendarLayoutTests: XCTestCase {
         )
         XCTAssertEqual(offset.x, 14 * 220, accuracy: 0.01)
         XCTAssertEqual(offset.y, 22 * 50 - 48, accuracy: 0.01)
-        // Simulator at 2e1d601 opened on hours 7–15. Evening now must sit below that window.
         XCTAssertGreaterThan(offset.y, 15 * 50)
+        let origin = CalendarLayout.timedContentOffset(
+            todayIndex: 0,
+            columnWidth: 220,
+            now: now,
+            calendar: calendar,
+            pixelsPerHour: 50,
+            headroom: 48
+        )
+        XCTAssertEqual(origin.x, 0, accuracy: 0.01)
+        XCTAssertEqual(origin.y, offset.y, accuracy: 0.01)
     }
 
     func testDayWindowIsPastPlusTodayPlusFuture() {

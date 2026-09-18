@@ -90,8 +90,8 @@ enum CalendarLayout {
         max(0, nowY(now: now, calendar: calendar, pixelsPerHour: pixelsPerHour) - headroom)
     }
 
-    /// Timed-canvas content offset so today is leading and `now` sits near the top.
-    /// Headers live outside this scroll (sticky), so y is canvas-only — not hour 0 of a tall column.
+    /// Day-strip X and hour-scroller Y are independent. Never write `x` onto the
+    /// vertical hour UIScrollView (`b956880` shoved chrome to x≈3070).
     static func timedContentOffset(
         todayIndex: Int,
         columnWidth: CGFloat,
