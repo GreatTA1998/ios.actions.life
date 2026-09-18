@@ -450,11 +450,10 @@ enum CalendarLayout {
                 if id.hasPrefix(timedCardAccessibilityPrefix) {
                     let taskID = String(id.dropFirst(timedCardAccessibilityPrefix.count))
                     if !taskID.isEmpty {
-                        if touchHitsPaintedCapsule(
-                            locationInScroll: locationInScroll,
-                            card: node,
-                            in: scroll
-                        ) {
+                        // Card-local bottom 16pt (`94e965c`). Convert-to-scroll
+                        // missed the painted capsule so the pan never claimed
+                        // the touch and hours scrolled (`b52d8de`).
+                        if local.y >= node.bounds.height - 16 - 0.5 {
                             return .capsule(taskID: taskID)
                         }
                         return .blockBody(taskID: taskID)
@@ -509,10 +508,9 @@ enum CalendarLayout {
         card: UIView,
         in scroll: UIScrollView
     ) -> Bool {
-        touchHitsCapsule(
-            locationInScroll,
-            capsule: paintedCapsuleBand(of: card, in: scroll)
-        )
+        let local = scroll.convert(locationInScroll, to: card)
+        guard card.bounds.insetBy(dx: -1, dy: -1).contains(local) else { return false }
+        return local.y >= card.bounds.height - 16 - 0.5
     }
 
     /// Bottom `handle` band of a UIKit view in window space. Zero-size

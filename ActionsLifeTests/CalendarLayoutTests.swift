@@ -771,6 +771,27 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(hit(310), .capsule(taskID: "pr3"))
         XCTAssertEqual(hit(303.6), .capsule(taskID: "pr3"))
         XCTAssertEqual(hit(319.0), .capsule(taskID: "pr3"))
+
+        // `b52d8de` a11y frame sat 11pt higher; card-local bottom 16pt still
+        // claims the capsule so the pan (not the hour scroller) gets the touch.
+        let shifted = UIView(frame: CGRect(x: 50, y: 269.3, width: 168, height: 39.3))
+        shifted.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        scroll.addSubview(shifted)
+        XCTAssertTrue(
+            CalendarLayout.touchHitsPaintedCapsule(
+                locationInScroll: CGPoint(x: 134, y: 269.3 + 39.3 - 8),
+                card: shifted,
+                in: scroll
+            )
+        )
+        XCTAssertFalse(
+            CalendarLayout.touchHitsPaintedCapsule(
+                locationInScroll: CGPoint(x: 134, y: 269.3 + 8),
+                card: shifted,
+                in: scroll
+            ),
+            "title / card body must still open Details"
+        )
     }
 
     func testCapsulePanTranslationGrowsBlockPastThirtyMinutes() {

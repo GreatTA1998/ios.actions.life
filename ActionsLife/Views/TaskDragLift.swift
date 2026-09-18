@@ -589,7 +589,6 @@ struct HourDurationPanBridge: UIViewRepresentable {
             // False so a tap on empty hour / title still reaches the recognizers
             // (`605f886` cancelled SpatialTap and create went all-day).
             pan.cancelsTouchesInView = false
-            pan.maximumNumberOfTouches = 1
             tap.addTarget(self, action: #selector(handleTap(_:)))
             tap.delegate = self
             tap.cancelsTouchesInView = true
@@ -662,9 +661,11 @@ struct HourDurationPanBridge: UIViewRepresentable {
             return CalendarLayout.DurationCapsuleTarget(taskID: taskID, duration: 30, rect: .zero)
         }
 
-        @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
-            // Capsule pan `translation.y` → block end instant (`previewDuration`).
-            let deltaY = gesture.translation(in: gesture.view).y
+        @objc func handlePan(_ gesture: DurationPanRecognizer) {
+            // Window `location.y` delta → block end instant. Do not use
+            // `UIPanGestureRecognizer.translation` (0 while `.possible`, and
+            // overriding it at `b52d8de` failed the pan so hours scrolled).
+            let deltaY = gesture.trackedTranslationY
             switch gesture.state {
             case .began:
                 dragging = true
@@ -680,24 +681,19 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 }
                 if let hit = pendingHit {
                     parent.onBegan(hit)
-                    parent.onChanged(deltaY)
                 }
+                parent.onChanged(deltaY)
             case .changed:
-                guard dragging, pendingHit != nil else { return }
+                guard dragging else { return }
                 restoreLockedOffsets()
                 parent.onChanged(deltaY)
             case .ended:
                 guard dragging else { return }
                 dragging = false
-                let hadHit = pendingHit != nil
                 pendingHit = nil
-                if hadHit {
-                    parent.onChanged(deltaY)
-                    unlockOffsets()
-                    parent.onEnded()
-                } else {
-                    unlockOffsets()
-                }
+                parent.onChanged(deltaY)
+                unlockOffsets()
+                parent.onEnded()
             case .cancelled, .failed:
                 let wasDragging = dragging
                 dragging = false
@@ -755,6 +751,8 @@ struct HourDurationPanBridge: UIViewRepresentable {
             var current = view
             while let node = current {
                 if let scroll = node as? UIScrollView {
+                    scroll.canCancelContentTouches = false
+                    scroll.delaysContentTouches = false
                     found.append((scroll, scroll.contentOffset))
                 }
                 current = node.superview
@@ -774,16 +772,14 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
     }
 
-    final class DurationPanRecognizer: UIPanGestureRecognizer {
+    /// Capsule pan on the hour scroller. Not `UIPanGestureRecognizer`:
+    /// overriding `translation(in:)` / forcing `.began` on a UIPan at
+    /// `b52d8de` failed the recognizer, so `require(toFail:)` released and
+    /// hours scrolled. Window `location.y` is `trackedTranslationY`.
+    final class DurationPanRecognizer: UIGestureRecognizer {
         weak var owner: Coordinator?
+        private(set) var trackedTranslationY: CGFloat = 0
         private var originWindowY: CGFloat = 0
-        private var trackedTranslationY: CGFloat = 0
-
-        /// Finger `translation.y`. Superclass `translation(in:)` is 0 while
-        /// `.possible`, so the 8pt threshold never fired and height stayed 30 min.
-        override func translation(in view: UIView?) -> CGPoint {
-            CGPoint(x: 0, y: trackedTranslationY)
-        }
 
         override func reset() {
             super.reset()
@@ -792,25 +788,30 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-            if let touch = touches.first {
-                originWindowY = touch.location(in: nil).y
-                trackedTranslationY = 0
-            }
             super.touchesBegan(touches, with: event)
+            guard touches.count == 1, let touch = touches.first else {
+                state = .failed
+                return
+            }
+            originWindowY = touch.location(in: nil).y
+            trackedTranslationY = 0
             owner?.lockOffsets(from: view)
             owner?.restoreLockedOffsets()
         }
 
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
-            if let touch = touches.first {
-                trackedTranslationY = touch.location(in: nil).y - originWindowY
-            }
-            owner?.restoreLockedOffsets()
             super.touchesMoved(touches, with: event)
+            guard let touch = touches.first else { return }
+            trackedTranslationY = touch.location(in: nil).y - originWindowY
             owner?.restoreLockedOffsets()
-            if state == .possible, abs(trackedTranslationY) >= 8 {
-                state = .began
+            if state == .possible {
+                if abs(trackedTranslationY) >= 8 {
+                    state = .began
+                }
+            } else if state == .began || state == .changed {
+                state = .changed
             }
+            owner?.restoreLockedOffsets()
         }
 
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
@@ -820,6 +821,11 @@ struct HourDurationPanBridge: UIViewRepresentable {
             if state == .possible, abs(trackedTranslationY) >= 8 {
                 state = .began
             }
+            if state == .began || state == .changed {
+                state = .ended
+            } else if state == .possible {
+                state = .failed
+            }
             super.touchesEnded(touches, with: event)
             if state != .began && state != .changed && state != .ended {
                 owner?.unlockOffsets()
@@ -827,6 +833,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+            state = .cancelled
             super.touchesCancelled(touches, with: event)
             owner?.unlockOffsets()
         }
