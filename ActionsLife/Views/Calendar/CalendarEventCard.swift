@@ -91,6 +91,11 @@ struct CalendarEventCard: View {
         }
         .background { DropZoneReporter(kind: .nest(task.id)) }
         .taskDragLift(id: task.id, name: task.name, duration: task.duration, fromCalendar: true, onDrop: onDrop)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !compact, chrome.durationResize == nil, chrome.drag == nil else { return }
+            onOpen()
+        }
         .overlay(alignment: .bottom) {
             if !compact {
                 DurationEdgeHandle(
@@ -104,46 +109,53 @@ struct CalendarEventCard: View {
     }
 }
 
-/// 16pt painted capsule. SwiftUI `DragGesture` never fired inside the hour
-/// `ScrollView` (`c7a355e` simultaneous, `b45eccd` highPriority) — UIKit's
-/// scroll pan is exclusive. This view **is** the hit target: a UIView pan on
-/// the capsule, and the hour scroller's pan must fail it. Title taps still
-/// open Details. Pin `contentOffset` only after `.began`. Never
-/// `isScrollEnabled = false` on touch-down.
+/// 16pt painted capsule in the same layout as the card (padding, not offset).
+/// SwiftUI `DragGesture` sits on this SwiftUI view so hit-testing matches
+/// pixels. The hour scroller is configured not to cancel subview touches
+/// (`HourScrollTouchBridge`). Pin `contentOffset` only after the drag begins.
+/// Title / card-body taps still open Details — do not enlarge this band.
 struct DurationEdgeHandle: View {
     let task: TaskSnapshot
     var onResize: (Double) -> Void
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
-        DurationHandleBridge(
-            enabled: chrome.drag == nil && !chrome.isResizing
-                && (chrome.durationResize == nil || chrome.durationResize?.taskID == task.id),
-            onBegan: beginIfNeeded,
-            onChanged: { chrome.moveDurationResize(deltaY: $0) },
-            onEnded: finishIfNeeded,
-            onCancel: { chrome.cancelDurationResize() }
-        )
-        .frame(maxWidth: .infinity)
-        .frame(height: HomeChrome.durationCapsuleHit)
-        .overlay(alignment: .bottom) {
-            VStack(spacing: 4) {
-                if chrome.durationResize?.taskID == task.id {
-                    Rectangle()
-                        .fill(Theme.dragPreview.opacity(0.85))
-                        .frame(height: 1)
+        Color.primary.opacity(0.001)
+            .frame(maxWidth: .infinity)
+            .frame(height: HomeChrome.durationCapsuleHit)
+            .contentShape(Rectangle())
+            .overlay(alignment: .bottom) {
+                VStack(spacing: 4) {
+                    if chrome.durationResize?.taskID == task.id {
+                        Rectangle()
+                            .fill(Theme.dragPreview.opacity(0.85))
+                            .frame(height: 1)
+                    }
+                    Capsule()
+                        .fill(Theme.handle)
+                        .frame(width: 22, height: 3)
+                        .padding(.bottom, 4)
                 }
-                Capsule()
-                    .fill(Theme.handle)
-                    .frame(width: 22, height: 3)
-                    .padding(.bottom, 4)
+                .allowsHitTesting(false)
             }
-            .allowsHitTesting(false)
-        }
-        .background {
-            ScrollOffsetLockBridge(locked: chrome.durationResize?.taskID == task.id)
-        }
-        .accessibilityLabel("Resize duration")
+            .highPriorityGesture(durationDrag)
+            .background {
+                ScrollOffsetLockBridge(locked: chrome.durationResize?.taskID == task.id)
+            }
+            .accessibilityLabel("Resize duration")
+    }
+
+    private var durationDrag: some Gesture {
+        DragGesture(minimumDistance: 1)
+            .onChanged { value in
+                guard chrome.drag == nil, !chrome.isResizing else { return }
+                beginIfNeeded()
+                chrome.moveDurationResize(deltaY: value.translation.height)
+            }
+            .onEnded { value in
+                chrome.moveDurationResize(deltaY: value.translation.height)
+                finishIfNeeded()
+            }
     }
 
     private func beginIfNeeded() {

@@ -184,6 +184,11 @@ struct DayCalendarView: View {
                     .frame(width: 1, height: 1)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
+
+                    HourScrollTouchBridge()
+                        .frame(width: 1, height: 1)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
             }
             .frame(height: timedHeight)
