@@ -1,16 +1,20 @@
 import CoreGraphics
 import Foundation
 import SwiftUI
+import UIKit
 
 /// Shared pointer session so split, scroll, and drag-drop cannot all handle one touch.
 ///
 /// `isResizing` must only be set by `SplitResizeBridge`, which clears it on
-/// ended **and** cancelled/failed. A stuck `true` disables scrolling via
-/// `pointerCaptured` → `scrollDisabled`.
+/// ended **and** cancelled/failed. A stuck `true` used to freeze both panes
+/// via `scrollDisabled`. List autoscroll must **not** toggle `scrollDisabled`
+/// during a lift — SwiftUI resets `contentOffset` when that flips.
 @Observable
 final class HomeChrome {
     static let holdDelay: TimeInterval = 0.15
     static let touchSlop: CGFloat = 5
+    /// Legacy Expo constant. Autoscroll uses `DropMath.edgeBand(for:)` (visible
+    /// pane fraction) so a hold on Connect above Visa still scrolls.
     static let edgeBand: CGFloat = 44
     static let edgeStep: CGFloat = 16
     static let splitHandle: CGFloat = 36
@@ -27,6 +31,44 @@ final class HomeChrome {
     var calendarPane: CGRect = .null
     var listPane: CGRect = .null
     var homeFrame: CGRect = .null
+
+    /// Bound from *inside* each pane's scroll content (and from the lift
+    /// recognizer's enclosing `UIScrollView`). Overlay DFS picks neighbors.
+    @ObservationIgnored
+    weak var listScrollView: UIScrollView?
+    @ObservationIgnored
+    weak var calendarScrollView: UIScrollView?
+
+    /// Owns the drag-time `CADisplayLink`. Must not live on a SwiftUI overlay
+    /// whose `updateUIView` never sees `drag` (InboxView does not read it).
+    @ObservationIgnored
+    let edgeScrollDriver = EdgeScrollDriver()
+
+    enum ScrollPane {
+        case list
+        case calendar
+    }
+
+    init() {
+        edgeScrollDriver.chrome = self
+    }
+
+    deinit {
+        edgeScrollDriver.stop()
+    }
+
+    func bindScrollView(_ scroll: UIScrollView, pane: ScrollPane) {
+        switch pane {
+        case .list:
+            listScrollView = scroll
+        case .calendar:
+            calendarScrollView = scroll
+        }
+    }
+
+    func reapplyEdgeScrollOffsets() {
+        edgeScrollDriver.reapply()
+    }
 
     /// Requested edge-scroll deltas consumed by scroll views each tick.
     var calendarScrollDelta: CGSize = .zero
@@ -118,12 +160,14 @@ final class HomeChrome {
         )
         drag = session
         updateEdgeScroll(finger: finger)
+        edgeScrollDriver.setActive(true)
     }
 
     func finishDrag() -> DropTarget {
         isLifting = false
         calendarScrollDelta = .zero
         listScrollDelta = .zero
+        edgeScrollDriver.setActive(false)
         let target = drag?.target ?? .none
         drag = nil
         return target
@@ -133,6 +177,7 @@ final class HomeChrome {
         isLifting = false
         calendarScrollDelta = .zero
         listScrollDelta = .zero
+        edgeScrollDriver.setActive(false)
         drag = nil
     }
 
@@ -141,10 +186,12 @@ final class HomeChrome {
             CGPoint(x: $0.finger.x - $0.grabOffset.width, y: $0.finger.y - $0.grabOffset.height)
         }
         let ghostSize = drag?.ghostSize ?? .zero
+        let listBand = DropMath.edgeBand(for: listPane)
+        let calendarBand = DropMath.edgeBand(for: calendarPane)
         calendarScrollDelta = DropMath.edgeScrollDelta(
             finger: finger,
             viewport: calendarPane,
-            band: Self.edgeBand,
+            band: calendarBand,
             step: Self.edgeStep,
             axes: [.horizontal, .vertical],
             ghostTop: ghost,
@@ -153,7 +200,7 @@ final class HomeChrome {
         listScrollDelta = DropMath.edgeScrollDelta(
             finger: finger,
             viewport: listPane,
-            band: Self.edgeBand,
+            band: listBand,
             step: Self.edgeStep,
             axes: [.vertical],
             ghostTop: ghost,
@@ -204,6 +251,35 @@ final class HomeChrome {
             minPane: splitMinPane
         )
     }
+
+    /// Programmatic offset for a SwiftUI `UIScrollView`. Do not flip
+    /// `isScrollEnabled` — that rebuilds the representable and resets offset.
+    static func clampedContentOffset(
+        current: CGPoint,
+        adding delta: CGSize,
+        contentSize: CGSize,
+        viewportSize: CGSize,
+        insetTop: CGFloat = 0,
+        insetLeft: CGFloat = 0,
+        insetBottom: CGFloat = 0,
+        insetRight: CGFloat = 0
+    ) -> CGPoint {
+        let minX = -insetLeft
+        let minY = -insetTop
+        let maxX = max(minX, contentSize.width - viewportSize.width + insetRight)
+        let maxY = max(minY, contentSize.height - viewportSize.height + insetBottom)
+        return CGPoint(
+            x: min(maxX, max(minX, current.x + delta.width)),
+            y: min(maxY, max(minY, current.y + delta.height))
+        )
+    }
+
+    static func applyContentOffset(_ offset: CGPoint, on scroll: UIScrollView) {
+        guard scroll.contentOffset != offset else { return }
+        UIView.performWithoutAnimation {
+            scroll.setContentOffset(offset, animated: false)
+        }
+    }
 }
 
 enum DropMath {
@@ -211,6 +287,13 @@ enum DropMath {
         let rawValue: Int
         static let horizontal = AxisSet(rawValue: 1 << 0)
         static let vertical = AxisSet(rawValue: 1 << 1)
+    }
+
+    /// Bottom/top band of the **visible pane** (not a fixed 44pt). A hold over
+    /// the last on-screen row (Connect above Visa) must autoscroll.
+    static func edgeBand(for viewport: CGRect, floor: CGFloat = 64) -> CGFloat {
+        guard !viewport.isNull, viewport.height > 1 else { return floor }
+        return min(viewport.height * 0.5, max(floor, viewport.height * 0.25))
     }
 
     /// Web `getLocalY`: **finger** (clientY), not ghost-top, minus the canvas
@@ -310,7 +393,7 @@ enum DropMath {
         let listEdgeScrolling = edgeScrollDelta(
             finger: finger,
             viewport: listPane,
-            band: HomeChrome.edgeBand,
+            band: edgeBand(for: listPane),
             step: 1,
             axes: [.vertical],
             ghostTop: ghostTop,

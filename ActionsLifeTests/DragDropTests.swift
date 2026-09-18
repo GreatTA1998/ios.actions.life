@@ -109,11 +109,11 @@ final class DragDropTests: XCTestCase {
     func testListSlotBeatsBroadListZone() {
         let zones = [
             HomeChrome.DropZone(kind: .list, frame: CGRect(x: 0, y: 400, width: 400, height: 400)),
-            HomeChrome.DropZone(kind: .listSlot(parentID: "", index: 2), frame: CGRect(x: 12, y: 480, width: 360, height: 22))
+            HomeChrome.DropZone(kind: .listSlot(parentID: "", index: 2), frame: CGRect(x: 12, y: 580, width: 360, height: 22))
         ]
         let target = DropMath.target(
-            ghostTop: CGPoint(x: 40, y: 486),
-            finger: CGPoint(x: 40, y: 490),
+            ghostTop: CGPoint(x: 40, y: 586),
+            finger: CGPoint(x: 40, y: 590),
             ghostSize: CGSize(width: 200, height: 36),
             zones: zones,
             draggingID: "task",
@@ -335,6 +335,7 @@ final class DragDropTests: XCTestCase {
         XCTAssertTrue(chrome.isLifting)
         XCTAssertEqual(chrome.ghostTop.x, 10, accuracy: 0.01)
         XCTAssertEqual(chrome.ghostTop.y, 400, accuracy: 0.01)
+        chrome.cancelDrag()
     }
 
     func testLiftedRowAtListEdgeRequestsAutoscroll() {
@@ -350,6 +351,85 @@ final class DragDropTests: XCTestCase {
         )
         XCTAssertEqual(chrome.listScrollDelta.height, HomeChrome.edgeStep)
         XCTAssertGreaterThan(chrome.edgeScrollGeneration, 0)
+        chrome.cancelDrag()
+    }
+
+    func testVisiblePaneBandCoversConnectRowAboveVisa() {
+        let pane = CGRect(x: 0, y: 500, width: 400, height: 400)
+        let band = DropMath.edgeBand(for: pane)
+        XCTAssertEqual(band, 100, accuracy: 0.01)
+        XCTAssertGreaterThan(band, HomeChrome.edgeBand)
+
+        // Visa header occupies the last ~50pt; Connect sits above it. A 44pt
+        // band misses that hold (`86933ab` / `pr4-86933ab-edge-scroll.png`).
+        let connectFinger = CGPoint(x: 40, y: pane.maxY - 80)
+        let ghostTop = CGPoint(x: 12, y: connectFinger.y - 22)
+        let ghostSize = CGSize(width: 200, height: 44)
+        let thin = DropMath.edgeScrollDelta(
+            finger: connectFinger,
+            viewport: pane,
+            band: HomeChrome.edgeBand,
+            step: 16,
+            axes: [.vertical],
+            ghostTop: ghostTop,
+            ghostSize: ghostSize
+        )
+        XCTAssertEqual(thin, .zero)
+
+        let thick = DropMath.edgeScrollDelta(
+            finger: connectFinger,
+            viewport: pane,
+            band: band,
+            step: 16,
+            axes: [.vertical],
+            ghostTop: ghostTop,
+            ghostSize: ghostSize
+        )
+        XCTAssertEqual(thick.height, 16)
+
+        let mid = DropMath.edgeScrollDelta(
+            finger: CGPoint(x: 40, y: pane.midY),
+            viewport: pane,
+            band: band,
+            step: 16,
+            axes: [.vertical],
+            ghostTop: CGPoint(x: 12, y: pane.midY - 20),
+            ghostSize: ghostSize
+        )
+        XCTAssertEqual(mid, .zero)
+    }
+
+    func testHoldOnLastVisibleListRowAutoscrolls() {
+        let chrome = HomeChrome()
+        chrome.calendarPane = CGRect(x: 0, y: 0, width: 400, height: 364)
+        chrome.listPane = CGRect(x: 0, y: 500, width: 400, height: 400)
+        // Finger stays inside the visible list pane — not past maxY.
+        chrome.beginDrag(
+            taskID: "photo",
+            name: "Attach a photo",
+            duration: 15,
+            finger: CGPoint(x: 40, y: 820),
+            frame: CGRect(x: 12, y: 798, width: 360, height: 44)
+        )
+        XCTAssertEqual(chrome.listScrollDelta.height, HomeChrome.edgeStep)
+        chrome.cancelDrag()
+    }
+
+    func testClampedOffsetMovesWhenContentIsTallerThanPane() {
+        let next = HomeChrome.clampedContentOffset(
+            current: .zero,
+            adding: CGSize(width: 0, height: 16),
+            contentSize: CGSize(width: 400, height: 1200),
+            viewportSize: CGSize(width: 400, height: 400)
+        )
+        XCTAssertEqual(next.y, 16)
+        let stuck = HomeChrome.clampedContentOffset(
+            current: .zero,
+            adding: CGSize(width: 0, height: 16),
+            contentSize: CGSize(width: 400, height: 400),
+            viewportSize: CGSize(width: 400, height: 400)
+        )
+        XCTAssertEqual(stuck.y, 0)
     }
 
     func testListEdgeHoldDoesNotReorder() {

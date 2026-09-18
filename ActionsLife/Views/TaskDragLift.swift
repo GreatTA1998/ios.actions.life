@@ -11,8 +11,8 @@ import UIKit
 /// Do **not** add `shouldBeRequiredToFailBy` → scroll pan. That relationship
 /// leaks across SwiftUI rebuilds after a split resize and freezes both panes.
 /// Exclusive-vs-pan is enough: a flick fails this recognizer via slop, a still
-/// hold begins and the pan cannot share the touch. `pointerCaptured` then
-/// disables scroll for edge autoscroll + calendar drop.
+/// hold begins and the pan cannot share the touch. `scrollDisabled` stays off
+/// during a lift so `HomeChrome.edgeScrollDriver` can move the list.
 struct TaskDragLift: ViewModifier {
     let taskID: String
     let name: String
@@ -41,6 +41,9 @@ struct TaskDragLift: ViewModifier {
                     slop: HomeChrome.touchSlop,
                     rowFrame: frame,
                     isActive: chrome.drag?.taskID == taskID,
+                    onEnclosingScroll: { scroll in
+                        chrome.bindScrollView(scroll, pane: fromCalendar ? .calendar : .list)
+                    },
                     onHold: { point, rowFrame in
                         chrome.beginDrag(
                             taskID: taskID,
@@ -119,21 +122,75 @@ struct PaneFrameReporter: View {
     }
 }
 
-/// Drives pane autoscroll from a CADisplayLink while a row is lifted.
+/// Captures the enclosing `UIScrollView` from **inside** scroll content
+/// (ancestor walk). Overlay search cannot see a neighbor pane's scroller,
+/// and a representable sitting *beside* UIScrollView never finds one.
+struct ScrollViewBinder: UIViewRepresentable {
+    var onFound: (UIScrollView) -> Void
+
+    func makeUIView(context: Context) -> BinderView {
+        let view = BinderView()
+        view.onFound = onFound
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = .clear
+        return view
+    }
+
+    func updateUIView(_ uiView: BinderView, context: Context) {
+        uiView.onFound = onFound
+        uiView.probe()
+    }
+
+    final class BinderView: UIView {
+        var onFound: ((UIScrollView) -> Void)?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            probe()
+        }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            probe()
+        }
+
+        func probe() {
+            let find = { [weak self] in
+                guard let self else { return }
+                if let scroll = Self.enclosingScrollView(from: self) {
+                    self.onFound?(scroll)
+                }
+            }
+            find()
+            DispatchQueue.main.async(execute: find)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: find)
+        }
+
+        static func enclosingScrollView(from start: UIView) -> UIScrollView? {
+            var view: UIView? = start
+            while let current = view {
+                if current is UIWindow { return nil }
+                if let scroll = current as? UIScrollView { return scroll }
+                view = current.superview
+            }
+            return nil
+        }
+
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+    }
+}
+
+/// Lives **inside** the pane `ScrollView` content. Binds that pane's
+/// `UIScrollView` (ancestor walk, same path as the working lift recognizer)
+/// and re-applies the driver's sticky offset after SwiftUI layout.
 ///
-/// Must live as an **overlay on the pane** (not a `.background` inside the
-/// ScrollView). SwiftUI representables inside scroll content are often siblings
-/// of `UIScrollView`, so ancestor search finds nothing and the list never moves.
-/// A display link + `layoutSubviews` re-apply also beats SwiftUI resetting
-/// `contentOffset` when `scrollDisabled` / chrome ticks rebuild the tree.
+/// Do not overlay this on the pane: overlay DFS / neighbor search is how
+/// `86933ab` and `0b7c5f5` failed to move the list. The display link lives
+/// on `HomeChrome.edgeScrollDriver`, not here — InboxView does not read
+/// `chrome.drag`, so `updateUIView` would never start a link on lift.
 struct ScrollEdgeBridge: UIViewRepresentable {
     var chrome: HomeChrome
-    var pane: EdgeScrollPane
-
-    enum EdgeScrollPane {
-        case list
-        case calendar
-    }
+    var pane: HomeChrome.ScrollPane
 
     func makeUIView(context: Context) -> BridgeView {
         let view = BridgeView()
@@ -148,161 +205,151 @@ struct ScrollEdgeBridge: UIViewRepresentable {
     func updateUIView(_ uiView: BridgeView, context: Context) {
         uiView.chrome = chrome
         uiView.pane = pane
-        uiView.syncDisplayLink()
-    }
-
-    static func dismantleUIView(_ uiView: BridgeView, coordinator: Void) {
-        uiView.stopDisplayLink()
+        uiView.bindEnclosing()
     }
 
     final class BridgeView: UIView {
         var chrome: HomeChrome?
-        var pane: EdgeScrollPane = .list
-        private var displayLink: CADisplayLink?
-        private weak var scroll: UIScrollView?
-        private var stickyOffset: CGPoint?
-
-        deinit { displayLink?.invalidate() }
-
-        func syncDisplayLink() {
-            if window != nil, chrome?.drag != nil {
-                startDisplayLink()
-            } else if chrome?.drag == nil {
-                stopDisplayLink()
-            }
-        }
-
-        func stopDisplayLink() {
-            displayLink?.invalidate()
-            displayLink = nil
-            stickyOffset = nil
-        }
+        var pane: HomeChrome.ScrollPane = .list
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
-            syncDisplayLink()
+            bindEnclosing()
+        }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            bindEnclosing()
         }
 
         override func layoutSubviews() {
             super.layoutSubviews()
-            if let stickyOffset, chrome?.drag != nil, let scroll = resolveScrollView() {
-                if scroll.contentOffset != stickyOffset {
-                    apply(offset: stickyOffset, on: scroll)
-                }
-            }
+            bindEnclosing()
+            chrome?.reapplyEdgeScrollOffsets()
         }
 
-        private func startDisplayLink() {
-            guard displayLink == nil else { return }
-            let link = CADisplayLink(target: self, selector: #selector(tick))
-            link.add(to: .main, forMode: .common)
-            displayLink = link
-        }
-
-        @objc func tick() {
-            guard let chrome, chrome.drag != nil, let finger = chrome.drag?.finger else {
-                stickyOffset = nil
+        func bindEnclosing() {
+            guard let chrome, let scroll = ScrollViewBinder.BinderView.enclosingScrollView(from: self) else {
                 return
             }
-            let viewport = pane == .list ? chrome.listPane : chrome.calendarPane
-            let axes: DropMath.AxisSet = pane == .list ? [.vertical] : [.horizontal, .vertical]
-            let delta = DropMath.edgeScrollDelta(
-                finger: finger,
-                viewport: viewport,
-                band: HomeChrome.edgeBand,
-                step: HomeChrome.edgeStep,
-                axes: axes,
-                ghostTop: chrome.ghostTop,
-                ghostSize: chrome.drag?.ghostSize ?? .zero
-            )
-            guard let scroll = resolveScrollView() else { return }
-            if delta == .zero {
-                stickyOffset = scroll.contentOffset
-                return
-            }
-            let next = clampedOffset(scroll.contentOffset, adding: delta, on: scroll)
-            apply(offset: next, on: scroll)
-            stickyOffset = next
+            chrome.bindScrollView(scroll, pane: pane)
         }
 
-        private func clampedOffset(_ current: CGPoint, adding delta: CGSize, on scroll: UIScrollView) -> CGPoint {
-            let inset = scroll.adjustedContentInset
-            let contentH = max(scroll.contentSize.height, contentExtent(of: scroll, axis: .vertical))
-            let contentW = max(scroll.contentSize.width, contentExtent(of: scroll, axis: .horizontal))
-            let minX = -inset.left
-            let minY = -inset.top
-            let maxX = max(minX, contentW - scroll.bounds.width + inset.right)
-            let maxY = max(minY, contentH - scroll.bounds.height + inset.bottom)
-            return CGPoint(
-                x: min(maxX, max(minX, current.x + delta.width)),
-                y: min(maxY, max(minY, current.y + delta.height))
-            )
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+    }
+}
+
+/// Drives list/calendar autoscroll while a row is lifted. Retained by
+/// `HomeChrome` so it keeps ticking during a still hold even when SwiftUI
+/// does not call `updateUIView` on pane overlays.
+final class EdgeScrollDriver: NSObject {
+    weak var chrome: HomeChrome?
+    private var displayLink: CADisplayLink?
+    private var listSticky: CGPoint?
+    private var calendarSticky: CGPoint?
+
+    deinit { stop() }
+
+    func setActive(_ active: Bool) {
+        if active {
+            start()
+        } else {
+            stop()
+        }
+    }
+
+    func stop() {
+        displayLink?.invalidate()
+        displayLink = nil
+        listSticky = nil
+        calendarSticky = nil
+    }
+
+    func reapply() {
+        guard chrome?.drag != nil else { return }
+        if let scroll = chrome?.listScrollView, let listSticky {
+            HomeChrome.applyContentOffset(listSticky, on: scroll)
+        }
+        if let scroll = chrome?.calendarScrollView, let calendarSticky {
+            HomeChrome.applyContentOffset(calendarSticky, on: scroll)
+        }
+    }
+
+    private func start() {
+        guard displayLink == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(tick))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    @objc func tick() {
+        guard let chrome, chrome.drag != nil, let finger = chrome.drag?.finger else { return }
+        chrome.updateEdgeScroll(finger: finger)
+        step(pane: .list, finger: finger)
+        step(pane: .calendar, finger: finger)
+    }
+
+    private func step(pane: HomeChrome.ScrollPane, finger: CGPoint) {
+        guard let chrome else { return }
+        let viewport = pane == .list ? chrome.listPane : chrome.calendarPane
+        let axes: DropMath.AxisSet = pane == .list ? [.vertical] : [.horizontal, .vertical]
+        let delta = DropMath.edgeScrollDelta(
+            finger: finger,
+            viewport: viewport,
+            band: DropMath.edgeBand(for: viewport),
+            step: HomeChrome.edgeStep,
+            axes: axes,
+            ghostTop: chrome.ghostTop,
+            ghostSize: chrome.drag?.ghostSize ?? .zero
+        )
+        guard let scroll = pane == .list ? chrome.listScrollView : chrome.calendarScrollView,
+              scroll.window != nil
+        else { return }
+
+        if delta == .zero {
+            let current = scroll.contentOffset
+            if pane == .list { listSticky = current } else { calendarSticky = current }
+            return
         }
 
-        private func contentExtent(of scroll: UIScrollView, axis: DropMath.AxisSet) -> CGFloat {
-            scroll.subviews.reduce(0) { best, sub in
-                if axis.contains(.vertical) { return max(best, sub.frame.maxY) }
-                return max(best, sub.frame.maxX)
+        let inset = scroll.adjustedContentInset
+        let extent = Self.contentSize(of: scroll)
+        let current = (pane == .list ? listSticky : calendarSticky) ?? scroll.contentOffset
+        let next = HomeChrome.clampedContentOffset(
+            current: current,
+            adding: delta,
+            contentSize: extent,
+            viewportSize: scroll.bounds.size,
+            insetTop: inset.top,
+            insetLeft: inset.left,
+            insetBottom: inset.bottom,
+            insetRight: inset.right
+        )
+        HomeChrome.applyContentOffset(next, on: scroll)
+        if pane == .list { listSticky = next } else { calendarSticky = next }
+        DispatchQueue.main.async { [weak self, weak scroll] in
+            guard let self, let scroll, self.chrome?.drag != nil else { return }
+            let sticky = pane == .list ? self.listSticky : self.calendarSticky
+            if let sticky {
+                HomeChrome.applyContentOffset(sticky, on: scroll)
             }
         }
+    }
 
-        private func apply(offset: CGPoint, on scroll: UIScrollView) {
-            scroll.isScrollEnabled = true
-            scroll.setContentOffset(offset, animated: false)
-        }
-
-        /// Search this pane's subtree only — match the pane's global frame so
-        /// we never climb into the home VStack and steal the other scroller.
-        private func resolveScrollView() -> UIScrollView? {
-            let paneRect = pane == .list ? chrome?.listPane : chrome?.calendarPane
-            var view: UIView? = self
-            var fallback: UIView = self
-            while let current = view {
-                if current is UIWindow { break }
-                fallback = current
-                let frame = current.convert(current.bounds, to: nil)
-                if let paneRect, !paneRect.isNull, !paneRect.isEmpty,
-                   current.bounds.height > 60,
-                   frame.intersection(paneRect).height > paneRect.height * 0.5
-                {
-                    if let found = bestScrollView(in: current) {
-                        scroll = found
-                        return found
-                    }
-                }
-                view = current.superview
+    /// SwiftUI sometimes reports `contentSize == bounds` even when the hosting
+    /// subview is taller (Visa children below the fold). Measure subviews.
+    static func contentSize(of scroll: UIScrollView) -> CGSize {
+        var width = scroll.contentSize.width
+        var height = scroll.contentSize.height
+        for sub in scroll.subviews {
+            width = max(width, sub.frame.maxX)
+            height = max(height, sub.frame.maxY)
+            for nested in sub.subviews {
+                width = max(width, nested.frame.maxX)
+                height = max(height, nested.frame.maxY)
             }
-            if let found = bestScrollView(in: fallback) {
-                scroll = found
-                return found
-            }
-            return scroll
         }
-
-        private func bestScrollView(in root: UIView) -> UIScrollView? {
-            var best: UIScrollView?
-            var bestSlack: CGFloat = -1
-            func walk(_ node: UIView) {
-                if let scroll = node as? UIScrollView {
-                    let extraY = max(scroll.contentSize.height, contentExtent(of: scroll, axis: .vertical)) - scroll.bounds.height
-                    let extraX = max(scroll.contentSize.width, contentExtent(of: scroll, axis: .horizontal)) - scroll.bounds.width
-                    // List: skip the calendar (wide 2-axis) scroller if we climbed too far.
-                    if pane == .list, extraX > extraY + 80, extraX > 80 {
-                        // still walk children
-                    } else {
-                        let slack = pane == .list ? extraY : max(extraX, extraY)
-                        let score = slack + scroll.bounds.height * 0.001
-                        if score > bestSlack {
-                            bestSlack = score
-                            best = scroll
-                        }
-                    }
-                }
-                for sub in node.subviews { walk(sub) }
-            }
-            walk(root)
-            return best
-        }
+        return CGSize(width: width, height: height)
     }
 }
 
@@ -428,6 +475,7 @@ struct HoldThenDragBridge: UIViewRepresentable {
     var slop: CGFloat
     var rowFrame: CGRect
     var isActive: Bool
+    var onEnclosingScroll: (UIScrollView) -> Void
     var onHold: (CGPoint, CGRect) -> Void
     var onMove: (CGPoint) -> Void
     var onEnd: () -> Void
@@ -548,6 +596,7 @@ struct HoldThenDragBridge: UIViewRepresentable {
             var view: UIView? = installer
             while let current = view {
                 if let scroll = current as? UIScrollView {
+                    parent.onEnclosingScroll(scroll)
                     scroll.setContentOffset(scroll.contentOffset, animated: false)
                     let pan = scroll.panGestureRecognizer
                     if pan.state == .began || pan.state == .changed {
@@ -624,7 +673,10 @@ struct HoldThenDragBridge: UIViewRepresentable {
         func findHost() -> UIView? {
             var view: UIView? = superview
             while let current = view {
-                if current is UIScrollView { return current }
+                if let scroll = current as? UIScrollView {
+                    coordinator?.parent.onEnclosingScroll(scroll)
+                    return current
+                }
                 view = current.superview
             }
             // Never fall back to the `.background` host — that sibling view
