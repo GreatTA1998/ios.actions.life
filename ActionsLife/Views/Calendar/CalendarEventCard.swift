@@ -13,15 +13,26 @@ struct CalendarEventCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            cardBody
-                .padding(.horizontal, 8)
-                .padding(.vertical, compact ? 6 : 8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    guard !compact, chrome.durationResize == nil, chrome.drag == nil else { return }
-                    onOpen()
+            // Real UIView under the title (same idea as the 16pt HandleView).
+            // SwiftUI paint is not in the UIKit hit path, so hour-grid SpatialTap
+            // was getting title taps (`e0d3900` composer, not Details).
+            ZStack(alignment: .topLeading) {
+                if !compact {
+                    CardBodyTapBridge {
+                        guard chrome.durationResize == nil, chrome.drag == nil else { return }
+                        onOpen()
+                    }
                 }
+                cardBody
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, compact ? 6 : 8)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !compact, chrome.durationResize == nil, chrome.drag == nil else { return }
+                onOpen()
+            }
 
             if !compact {
                 DurationEdgeHandle(
@@ -114,9 +125,9 @@ struct CalendarEventCard: View {
     }
 }
 
-/// 16pt layout slot at the bottom of the timed card — not an overlay, so the
-/// hosting UIView sits on the painted capsule. UIKit pan lives on that view;
-/// the hour scroller must fail it. Title taps still open Details.
+/// 16pt layout slot at the bottom of the timed card. HandleView is under the
+/// capsule so the hour grid stays still; touchesMoved translation commits
+/// `setDuration`. Title taps hit `CardBodyTapBridge`, not SpatialTap.
 struct DurationEdgeHandle: View {
     let task: TaskSnapshot
     var onResize: (Double) -> Void

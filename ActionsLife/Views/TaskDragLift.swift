@@ -532,12 +532,79 @@ struct HourScrollTouchBridge: UIViewRepresentable {
     }
 }
 
-/// UIKit pan on the **16pt capsule UIView**. SwiftUI `DragGesture` never
-/// received `onChanged` inside the hour scroller (`c7a355e`). `require(toFail:)`
-/// only works if this view's frame is the painted capsule (`fb395c3` overlay
-/// left the UIView behind). `sizeThatFits` locks height at 16pt so the
-/// representable cannot expand over the title. Never `isScrollEnabled = false`
-/// on touch-down.
+/// UIView filling the timed-card body (above the 16pt capsule). Title taps
+/// must hit this view and open Details — SwiftUI `onTapGesture` lost to
+/// hour-grid SpatialTap (`e0d3900`).
+struct CardBodyTapBridge: UIViewRepresentable {
+    var onTap: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onTap: onTap)
+    }
+
+    func makeUIView(context: Context) -> TapView {
+        let view = TapView()
+        view.coordinator = context.coordinator
+        view.setContentHuggingPriority(.defaultLow, for: .vertical)
+        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        context.coordinator.attach(to: view)
+        return view
+    }
+
+    func updateUIView(_ uiView: TapView, context: Context) {
+        context.coordinator.onTap = onTap
+        uiView.coordinator = context.coordinator
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: TapView, context: Context) -> CGSize? {
+        CGSize(
+            width: proposal.width ?? uiView.bounds.width,
+            height: proposal.height ?? uiView.bounds.height
+        )
+    }
+
+    final class Coordinator: NSObject {
+        var onTap: () -> Void
+        let tap = UITapGestureRecognizer()
+
+        init(onTap: @escaping () -> Void) {
+            self.onTap = onTap
+            super.init()
+            tap.addTarget(self, action: #selector(handleTap))
+            tap.cancelsTouchesInView = true
+        }
+
+        func attach(to view: UIView) {
+            guard tap.view !== view else { return }
+            tap.view?.removeGestureRecognizer(tap)
+            view.addGestureRecognizer(tap)
+        }
+
+        @objc func handleTap() {
+            onTap()
+        }
+    }
+
+    final class TapView: UIView {
+        weak var coordinator: Coordinator?
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            backgroundColor = UIColor.black.withAlphaComponent(0.001)
+            isUserInteractionEnabled = true
+            isAccessibilityElement = false
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { nil }
+    }
+}
+
+/// 16pt capsule UIView. Scroll stays still because this view is under the
+/// finger (`e0d3900`); duration still must follow the touch. `touchesMoved`
+/// translation is the block's end-instant delta (`setDuration` on end).
+/// Dummy pan exists so the hour scroller must fail it. Never
+/// `isScrollEnabled = false` on touch-down.
 struct DurationHandleBridge: UIViewRepresentable {
     var enabled: Bool
     var onBegan: () -> Void
@@ -573,6 +640,8 @@ struct DurationHandleBridge: UIViewRepresentable {
         var parent: DurationHandleBridge
         let pan = UIPanGestureRecognizer()
         private(set) var dragging = false
+        private var originY: CGFloat = 0
+        private var lastDelta: CGFloat = 0
         private var wireToken = 0
 
         init(parent: DurationHandleBridge) {
@@ -592,6 +661,39 @@ struct DurationHandleBridge: UIViewRepresentable {
             guard pan.view !== view else { return }
             pan.view?.removeGestureRecognizer(pan)
             view.addGestureRecognizer(pan)
+        }
+
+        func noteBegan(atY y: CGFloat) {
+            guard !dragging else { return }
+            dragging = true
+            originY = y
+            lastDelta = 0
+            parent.onBegan()
+        }
+
+        func noteChanged(atY y: CGFloat) {
+            guard dragging else { return }
+            lastDelta = y - originY
+            parent.onChanged(lastDelta)
+        }
+
+        func noteEnded() {
+            guard dragging else { return }
+            dragging = false
+            parent.onChanged(lastDelta)
+            parent.onEnded()
+        }
+
+        func noteCancelled() {
+            guard dragging else { return }
+            // SwiftUI rebuild mid-pan cancels the recognizer; still commit so
+            // height grows (`e0d3900` ate scroll but never setDuration).
+            if abs(lastDelta) >= 1 {
+                noteEnded()
+            } else {
+                dragging = false
+                parent.onCancel()
+            }
         }
 
         func wireHourScroller(from view: UIView) {
@@ -641,26 +743,17 @@ struct DurationHandleBridge: UIViewRepresentable {
         }
 
         @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
-            let deltaY = gesture.translation(in: nil).y
+            let y = gesture.location(in: nil).y
             switch gesture.state {
             case .began:
-                dragging = true
-                parent.onBegan()
-                parent.onChanged(deltaY)
+                noteBegan(atY: y)
             case .changed:
-                guard dragging else { return }
-                parent.onChanged(deltaY)
+                noteChanged(atY: y)
             case .ended:
-                guard dragging else { return }
-                dragging = false
-                parent.onChanged(deltaY)
-                parent.onEnded()
+                noteChanged(atY: y)
+                noteEnded()
             case .cancelled, .failed:
-                let wasDragging = dragging
-                dragging = false
-                if wasDragging {
-                    parent.onCancel()
-                }
+                noteCancelled()
             default:
                 break
             }
@@ -703,6 +796,31 @@ struct DurationHandleBridge: UIViewRepresentable {
         override func didMoveToSuperview() {
             super.didMoveToSuperview()
             coordinator?.wireHourScroller(from: self)
+        }
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesBegan(touches, with: event)
+            guard let y = touches.first?.location(in: nil).y else { return }
+            coordinator?.noteBegan(atY: y)
+        }
+
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesMoved(touches, with: event)
+            guard let y = touches.first?.location(in: nil).y else { return }
+            coordinator?.noteChanged(atY: y)
+        }
+
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesEnded(touches, with: event)
+            if let y = touches.first?.location(in: nil).y {
+                coordinator?.noteChanged(atY: y)
+            }
+            coordinator?.noteEnded()
+        }
+
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesCancelled(touches, with: event)
+            coordinator?.noteCancelled()
         }
     }
 }

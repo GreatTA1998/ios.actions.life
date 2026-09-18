@@ -195,6 +195,9 @@ final class DragDropTests: XCTestCase {
     }
 
     func testDurationPanDownLengthensBlock() {
+        // Window finger-Y delta (HandleView.touchesMoved) writes this
+        // translation into setDuration so the block end instant actually grows
+        // (`e0d3900` ate the hour scroller but never committed).
         let chrome = HomeChrome()
         chrome.pixelsPerHour = 50
         chrome.snapInterval = 15

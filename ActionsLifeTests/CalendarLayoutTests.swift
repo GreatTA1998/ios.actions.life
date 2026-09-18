@@ -181,6 +181,9 @@ final class CalendarLayoutTests: XCTestCase {
             ),
             "title / card body must still open Details"
         )
+        let bodyHeight = frame.height - HomeChrome.durationCapsuleHit
+        XCTAssertEqual(bodyHeight, 20, accuracy: 0.01)
+        XCTAssertEqual(frame.minY + bodyHeight, capsule.minY, accuracy: 0.01)
     }
 
     func testDurationCapsuleRectIsBottomBandInContentSpace() {
