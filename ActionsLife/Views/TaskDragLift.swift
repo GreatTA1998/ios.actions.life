@@ -569,11 +569,6 @@ struct HourDurationPanBridge: UIViewRepresentable {
             context.coordinator.tap.isEnabled = enabled
         }
         uiView.coordinator = context.coordinator
-        // Re-installing mid-drag removes the recognizer and kills
-        // `setDuration` after the first few points (`81d22bb`).
-        if context.coordinator.dragging || context.coordinator.capturedTaskID != nil {
-            return
-        }
         uiView.ensureInstalled()
     }
 
@@ -693,7 +688,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
             bindStoreWrites(from: parent)
         }
 
-        /// `81d22bb` claimed the scroller but `writeDuration` was nil.
+        /// Handle follow must have a live `setDuration` (`81d22bb` pin-only).
         func hasLiveSetDurationCallback() -> Bool {
             writeDuration != nil
         }
@@ -975,15 +970,11 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 return
             }
             let scroll = owner?.hourScroll
-            owner?.refreshStoreWrites()
+            owner?.lockOffsets(from: scroll ?? view)
             owner?.captureCapsule(from: scroll, touch: touch)
-            // Pin only once we have `task.id` — lock without `setDuration`
-            // is the `81d22bb` byte-identical failure.
+            owner?.restoreLockedOffsets()
             if owner?.capturedTaskID != nil {
-                owner?.lockOffsets(from: scroll ?? view)
-                owner?.restoreLockedOffsets()
                 state = .began
-                owner?.followWindowY(windowY(of: touch), ended: false)
             }
         }
 
@@ -1072,10 +1063,6 @@ struct HourDurationPanBridge: UIViewRepresentable {
 
         func ensureInstalled() {
             guard let coordinator else { return }
-            if coordinator.dragging || coordinator.capturedTaskID != nil {
-                coordinator.refreshStoreWrites()
-                return
-            }
             if let scroll = nearestVerticalScrollView() {
                 attach(coordinator, to: scroll)
                 return
@@ -1101,11 +1088,6 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         private func attach(_ coordinator: Coordinator, to scroll: UIScrollView) {
-            if coordinator.dragging || coordinator.capturedTaskID != nil {
-                coordinator.hourScroll = scroll
-                coordinator.refreshStoreWrites()
-                return
-            }
             let pan = coordinator.pan
             let tap = coordinator.tap
             coordinator.hourScroll = scroll
