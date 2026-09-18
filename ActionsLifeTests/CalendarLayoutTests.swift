@@ -726,6 +726,69 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertNil(hit(CGPoint(x: 100, y: 4 * hourH + 10)))
     }
 
+    func testPaintedCapsuleBandIsBottom16ptOfA11yCardFrame() {
+        // `94e965c` a11y `calendar.timed.*` frame (50, 280.3, 168, 39.3).
+        // Press-drag y≈303.6–319.6 is the capsule; title stays Details.
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        scroll.contentSize = CGSize(width: 390, height: 1200)
+        let card = UIView(frame: CGRect(x: 50, y: 280.3, width: 168, height: 39.3))
+        card.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        scroll.addSubview(card)
+        scroll.layoutIfNeeded()
+
+        let band = CalendarLayout.paintedCapsuleBand(of: card, in: scroll)
+        XCTAssertEqual(band.height, 16, accuracy: 0.05)
+        XCTAssertEqual(band.minY, 303.6, accuracy: 0.05)
+        XCTAssertEqual(band.maxY, 319.6, accuracy: 0.05)
+
+        XCTAssertTrue(
+            CalendarLayout.touchHitsPaintedCapsule(
+                locationInScroll: CGPoint(x: 134, y: 310),
+                card: card,
+                in: scroll
+            )
+        )
+        XCTAssertFalse(
+            CalendarLayout.touchHitsPaintedCapsule(
+                locationInScroll: CGPoint(x: 134, y: 288),
+                card: card,
+                in: scroll
+            ),
+            "title / card body must still open Details"
+        )
+
+        func hit(_ y: CGFloat) -> CalendarLayout.PaintedCardHit? {
+            let location = CGPoint(x: 134, y: y)
+            let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: location)
+            return CalendarLayout.paintedCardHit(
+                from: view,
+                locationInScroll: location,
+                in: scroll
+            )
+        }
+
+        XCTAssertEqual(hit(288), .blockBody(taskID: "pr3"))
+        XCTAssertEqual(hit(310), .capsule(taskID: "pr3"))
+        XCTAssertEqual(hit(303.6), .capsule(taskID: "pr3"))
+        XCTAssertEqual(hit(319.0), .capsule(taskID: "pr3"))
+    }
+
+    func testCapsulePanTranslationGrowsBlockPastThirtyMinutes() {
+        // translation.y 50pt at 50px/hour: 30 min → 90 min end instant.
+        let preview = CalendarLayout.previewDuration(start: 30, deltaY: 50, pixelsPerHour: 50)
+        XCTAssertEqual(preview, 90, accuracy: 0.01)
+        XCTAssertGreaterThan(preview, 30)
+        XCTAssertEqual(CalendarLayout.snapDuration(preview, snap: 15), 90)
+        let chrome = HomeChrome()
+        chrome.pixelsPerHour = 50
+        chrome.snapInterval = 15
+        chrome.beginDurationResize(taskID: "pr3", duration: 30)
+        chrome.moveDurationResize(deltaY: 50)
+        let result = chrome.finishDurationResize()
+        XCTAssertEqual(result?.duration, 90)
+        XCTAssertGreaterThan(result?.duration ?? 0, 30)
+    }
+
     func testHitTestFindsCardPlacedAtBlockFrameOrigin() {
         // `Layout.place` a card-sized child at blockFrame.origin. Parent
         // height is the block bottom, not the canvas.

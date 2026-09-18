@@ -663,27 +663,41 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
-            let deltaY = gesture.translation(in: nil).y
+            // Capsule pan `translation.y` → block end instant (`previewDuration`).
+            let deltaY = gesture.translation(in: gesture.view).y
             switch gesture.state {
             case .began:
                 dragging = true
                 lockOffsets(from: gesture.view)
                 restoreLockedOffsets()
+                if pendingHit == nil, let scroll = gesture.view as? UIScrollView {
+                    if case .capsule(let target) = canvasHit(
+                        in: scroll,
+                        locationInScroll: gesture.location(in: scroll)
+                    ) {
+                        pendingHit = target
+                    }
+                }
                 if let hit = pendingHit {
                     parent.onBegan(hit)
+                    parent.onChanged(deltaY)
                 }
-                parent.onChanged(deltaY)
             case .changed:
-                guard dragging else { return }
+                guard dragging, pendingHit != nil else { return }
                 restoreLockedOffsets()
                 parent.onChanged(deltaY)
             case .ended:
                 guard dragging else { return }
                 dragging = false
+                let hadHit = pendingHit != nil
                 pendingHit = nil
-                parent.onChanged(deltaY)
-                unlockOffsets()
-                parent.onEnded()
+                if hadHit {
+                    parent.onChanged(deltaY)
+                    unlockOffsets()
+                    parent.onEnded()
+                } else {
+                    unlockOffsets()
+                }
             case .cancelled, .failed:
                 let wasDragging = dragging
                 dragging = false
@@ -762,27 +776,48 @@ struct HourDurationPanBridge: UIViewRepresentable {
 
     final class DurationPanRecognizer: UIPanGestureRecognizer {
         weak var owner: Coordinator?
+        private var originWindowY: CGFloat = 0
+        private var trackedTranslationY: CGFloat = 0
+
+        /// Finger `translation.y`. Superclass `translation(in:)` is 0 while
+        /// `.possible`, so the 8pt threshold never fired and height stayed 30 min.
+        override func translation(in view: UIView?) -> CGPoint {
+            CGPoint(x: 0, y: trackedTranslationY)
+        }
+
+        override func reset() {
+            super.reset()
+            originWindowY = 0
+            trackedTranslationY = 0
+        }
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            if let touch = touches.first {
+                originWindowY = touch.location(in: nil).y
+                trackedTranslationY = 0
+            }
             super.touchesBegan(touches, with: event)
             owner?.lockOffsets(from: view)
             owner?.restoreLockedOffsets()
         }
 
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+            if let touch = touches.first {
+                trackedTranslationY = touch.location(in: nil).y - originWindowY
+            }
             owner?.restoreLockedOffsets()
             super.touchesMoved(touches, with: event)
             owner?.restoreLockedOffsets()
-            if state == .possible {
-                let delta = translation(in: nil)
-                if abs(delta.y) >= 8 {
-                    state = .began
-                }
+            if state == .possible, abs(trackedTranslationY) >= 8 {
+                state = .began
             }
         }
 
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
-            if state == .possible, abs(translation(in: nil).y) >= 8 {
+            if let touch = touches.first {
+                trackedTranslationY = touch.location(in: nil).y - originWindowY
+            }
+            if state == .possible, abs(trackedTranslationY) >= 8 {
                 state = .began
             }
             super.touchesEnded(touches, with: event)

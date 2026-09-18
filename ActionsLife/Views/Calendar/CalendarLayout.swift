@@ -450,7 +450,11 @@ enum CalendarLayout {
                 if id.hasPrefix(timedCardAccessibilityPrefix) {
                     let taskID = String(id.dropFirst(timedCardAccessibilityPrefix.count))
                     if !taskID.isEmpty {
-                        if local.y >= node.bounds.height - 16 - 0.5 {
+                        if touchHitsPaintedCapsule(
+                            locationInScroll: locationInScroll,
+                            card: node,
+                            in: scroll
+                        ) {
                             return .capsule(taskID: taskID)
                         }
                         return .blockBody(taskID: taskID)
@@ -486,6 +490,29 @@ enum CalendarLayout {
         if scroll.bounds.height > 8, height >= scroll.bounds.height - 8 { return false }
         if scroll.contentSize.height > 8, height >= scroll.contentSize.height - 8 { return false }
         return true
+    }
+
+    /// Bottom 16pt of the painted card in the scroller's space (`94e965c`
+    /// a11y card `(50, 280.3, 168, 39.3)` → capsule y≈303.6–319.6).
+    static func paintedCapsuleBand(of card: UIView, in scroll: UIScrollView) -> CGRect {
+        let rect = card.convert(card.bounds, to: scroll)
+        return CGRect(
+            x: rect.minX,
+            y: rect.maxY - 16,
+            width: rect.width,
+            height: 16
+        )
+    }
+
+    static func touchHitsPaintedCapsule(
+        locationInScroll: CGPoint,
+        card: UIView,
+        in scroll: UIScrollView
+    ) -> Bool {
+        touchHitsCapsule(
+            locationInScroll,
+            capsule: paintedCapsuleBand(of: card, in: scroll)
+        )
     }
 
     /// Bottom `handle` band of a UIKit view in window space. Zero-size
@@ -579,6 +606,7 @@ enum CalendarLayout {
         )
     }
 
+    /// Capsule pan `translation.y` → new duration (block end instant).
     /// Web `DurationAdjuster.updateDuration`: minutes += deltaY / (pixelsPerHour / 60).
     static func previewDuration(start: Double, deltaY: CGFloat, pixelsPerHour: Double) -> Double {
         let minutesPerPoint = 60 / Double(hourHeight(pixelsPerHour: pixelsPerHour))

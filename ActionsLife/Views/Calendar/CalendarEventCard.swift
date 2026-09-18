@@ -120,9 +120,14 @@ struct DurationEdgeHandle: View {
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
-        Color.primary.opacity(0.001)
+        // Fill (not view.opacity) so UIKit hitTest does not skip alpha < 0.01
+        // (`Color.primary.opacity(0.001)` made the 16pt capsule unhittable).
+        Rectangle()
+            .fill(Color.primary.opacity(0.02))
             .frame(maxWidth: .infinity)
             .frame(height: HomeChrome.durationCapsuleHit)
+            .contentShape(Rectangle())
+            .allowsHitTesting(true)
             .overlay(alignment: .bottom) {
                 VStack(spacing: 4) {
                     if chrome.durationResize?.taskID == task.id {
