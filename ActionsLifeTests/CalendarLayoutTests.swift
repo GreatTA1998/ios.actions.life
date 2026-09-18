@@ -835,7 +835,7 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertGreaterThan(movedWindowY - beganWindowY, 16)
 
         let hourH = CalendarLayout.hourHeight(pixelsPerHour: 50)
-        let minutes = 30 + (movedWindowY - beganWindowY) / hourH * 60
+        let minutes = 30 + Double(movedWindowY - beganWindowY) / Double(hourH) * 60
         XCTAssertEqual(
             CalendarLayout.durationFromLocationDelta(
                 start: 30,
@@ -873,7 +873,7 @@ final class CalendarLayoutTests: XCTestCase {
         coordinator.startWindowFollow(taskID: "pr3", startDuration: 30, beganWindowY: beganWindowY)
         coordinator.followWindowY(movedWindowY, ended: false)
         XCTAssertEqual(live.last?.0, "pr3")
-        XCTAssertEqual(live.last?.1, minutes, accuracy: 0.01)
+        XCTAssertEqual(live.last?.1 ?? 0, minutes, accuracy: 0.01)
         XCTAssertGreaterThan(live.last?.1 ?? 0, 35)
         coordinator.followWindowY(movedWindowY, ended: true)
         XCTAssertEqual(commits.last?.0, "pr3")
