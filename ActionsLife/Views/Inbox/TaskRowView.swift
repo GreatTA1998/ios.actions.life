@@ -5,7 +5,10 @@ struct TaskRowView: View {
     let depth: Int
     @Bindable var store: TaskTreeStore
     @Binding var selectedTaskID: String?
-    var onAddChild: (String) -> Void
+    @Binding var composer: ComposerSlot?
+    @Binding var composerText: String
+    var onCommitComposer: () -> Void
+    var onCancelComposer: () -> Void
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
@@ -57,13 +60,31 @@ struct TaskRowView: View {
             .padding(.vertical, 6)
             .padding(.leading, CGFloat(depth) * 18)
             .contentShape(Rectangle())
+            .background {
+                if chrome.showsNestPreview(for: tree.id) {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Theme.dragPreview.opacity(0.15))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(
+                                    Theme.dragPreview.opacity(0.6),
+                                    style: StrokeStyle(lineWidth: 1, dash: [5, 4])
+                                )
+                        }
+                }
+            }
+            .background { DropZoneReporter(kind: .nest(tree.id)) }
             .taskDragLift(id: tree.id, name: tree.task.name, duration: tree.task.duration) { target in
-                store.applyDrop(target, taskID: tree.id)
+                store.applyDrop(target, taskID: tree.id, fromCalendar: false)
             }
             .allowsHitTesting(!chrome.isResizing)
             .contextMenu {
                 Button("Open", systemImage: "doc.text") { selectedTaskID = tree.id }
-                Button("Add subtask", systemImage: "plus") { onAddChild(tree.id) }
+                Button("Add subtask", systemImage: "plus") {
+                    composerText = ""
+                    composer = ComposerSlot(parentID: tree.id, index: tree.children.count)
+                    store.setCollapsed(tree.id, isCollapsed: false)
+                }
                 Button("Schedule today", systemImage: "calendar") {
                     store.schedule(tree.id, dayISO: DateISO.dayString(from: .now), time: DateISO.timeString(from: .now))
                 }
@@ -74,16 +95,43 @@ struct TaskRowView: View {
             }
 
             if !tree.task.isCollapsed {
-                ForEach(tree.children) { child in
+                ForEach(Array(tree.children.enumerated()), id: \.element.id) { index, child in
+                    composerOrDropzone(parentID: tree.id, index: index, ghost: false)
                     TaskRowView(
                         tree: child,
                         depth: depth + 1,
                         store: store,
                         selectedTaskID: $selectedTaskID,
-                        onAddChild: onAddChild
+                        composer: $composer,
+                        composerText: $composerText,
+                        onCommitComposer: onCommitComposer,
+                        onCancelComposer: onCancelComposer
                     )
                 }
+                // Web `ghost-negative`: trailing zone overhangs so the last gap stays tappable.
+                composerOrDropzone(parentID: tree.id, index: tree.children.count, ghost: true)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func composerOrDropzone(parentID: String, index: Int, ghost: Bool) -> some View {
+        if composer == ComposerSlot(parentID: parentID, index: index) {
+            InlineTaskComposer(
+                text: $composerText,
+                font: .subheadline,
+                onSubmit: onCommitComposer,
+                onCancel: onCancelComposer
+            )
+            .padding(.leading, CGFloat(depth + 1) * 18)
+            .zIndex(4)
+        } else {
+            ListDropzone(parentID: parentID, index: index, isRoot: false, ghost: ghost) {
+                composerText = ""
+                composer = ComposerSlot(parentID: parentID, index: index)
+                store.setCollapsed(parentID, isCollapsed: false)
+            }
+            .padding(.leading, CGFloat(depth + 1) * 18)
         }
     }
 

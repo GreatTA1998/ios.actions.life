@@ -11,6 +11,9 @@ struct DayCalendarView: View {
     @Environment(HomeChrome.self) private var chrome
     private let calendar = Calendar.current
     @State private var scrollOffset: CGPoint = .zero
+    @State private var pastCount = 14
+    @State private var futureCount = 21
+    @State private var scrolledDayID: String?
 
     private var pixelsPerHour: Double { store.profile?.pixelsPerHour ?? 50 }
     private var hourHeight: CGFloat { CalendarLayout.hourHeight(pixelsPerHour: pixelsPerHour) }
@@ -22,7 +25,6 @@ struct DayCalendarView: View {
             topChrome
         }
         .background(Theme.calendarBackground)
-        .scrollDisabled(chrome.pointerCaptured)
     }
 
     private var calendarScroll: some View {
@@ -44,12 +46,18 @@ struct DayCalendarView: View {
                 }
             }
             .scrollDisabled(chrome.pointerCaptured)
+            .scrollPosition(id: $scrolledDayID)
             .modifier(ScrollOffsetTracker(offset: $scrollOffset))
             .onAppear {
+                scrolledDayID = DateISO.dayString(from: selectedDay)
                 proxy.scrollTo(DateISO.dayString(from: selectedDay), anchor: .topLeading)
             }
             .onChange(of: selectedDay) { _, day in
+                scrolledDayID = DateISO.dayString(from: day)
                 proxy.scrollTo(DateISO.dayString(from: day), anchor: .topLeading)
+            }
+            .onChange(of: scrollOffset) { _, _ in
+                expandDayWindowIfNeeded()
             }
         }
     }
@@ -97,8 +105,22 @@ struct DayCalendarView: View {
     }
 
     private var days: [Date] {
-        let start = calendar.date(byAdding: .day, value: -7, to: calendar.startOfDay(for: .now)) ?? .now
-        return (0..<21).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+        CalendarLayout.dayWindow(past: pastCount, future: futureCount, calendar: calendar)
+    }
+
+    private func expandDayWindowIfNeeded() {
+        let column = columnWidth
+        guard column > 0 else { return }
+        let dayIndex = Int((max(scrollOffset.x, 0) / column).rounded(.down))
+        if dayIndex <= 1, pastCount < 180 {
+            if scrolledDayID == nil, days.indices.contains(max(dayIndex, 0)) {
+                scrolledDayID = DateISO.dayString(from: days[max(dayIndex, 0)])
+            }
+            pastCount += 14
+        }
+        if dayIndex >= days.count - 4, futureCount < 180 {
+            futureCount += 14
+        }
     }
 }
 

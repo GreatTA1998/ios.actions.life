@@ -51,7 +51,7 @@ struct DayColumnView: View {
                         compact: true,
                         onToggle: { store.toggleDone(task.id) },
                         onOpen: { selectedTaskID = task.id },
-                        onDrop: { store.applyDrop($0, taskID: task.id) }
+                        onDrop: { store.applyDrop($0, taskID: task.id, fromCalendar: true) }
                     )
                 }
                 if chrome.showsAllDayPreview(for: dayISO) {
@@ -77,7 +77,7 @@ struct DayColumnView: View {
                     children: store.children(of: event.task.id),
                     onToggle: { store.toggleDone(event.task.id) },
                     onOpen: { selectedTaskID = event.task.id },
-                    onDrop: { store.applyDrop($0, taskID: event.task.id) }
+                    onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) }
                 )
                 .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
                 .position(x: columnWidth / 2, y: event.y + max(event.height, 36) / 2)
