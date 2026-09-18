@@ -145,6 +145,19 @@ final class TaskTreeStore {
         save()
     }
 
+    func applyDrop(_ target: HomeChrome.DropTarget, taskID: String) {
+        switch target {
+        case .none:
+            break
+        case .list:
+            clearSchedule(taskID)
+        case .allDay(let dayISO):
+            schedule(taskID, dayISO: dayISO, time: "")
+        case .timed(let dayISO, let minutes):
+            schedule(taskID, dayISO: dayISO, time: CalendarLayout.clock(fromMinutes: minutes))
+        }
+    }
+
     func clearSchedule(_ id: String) {
         applySnapshotsAfter { docs in
             TreeMaintenance.applyDateChange(taskID: id, newDate: "", docs: &docs)

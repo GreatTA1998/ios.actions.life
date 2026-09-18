@@ -37,8 +37,14 @@ final class CalendarLayoutTests: XCTestCase {
 
     func testDropYMapsToSnappedClock() {
         let minutes = CalendarLayout.minutes(atY: 10 * 50 + 20, pixelsPerHour: 50, snap: 15)
-        XCTAssertEqual(minutes, 10 * 60 + 15)
-        XCTAssertEqual(CalendarLayout.clock(fromMinutes: minutes), "10:15")
+        XCTAssertEqual(minutes, 10 * 60 + 30)
+        XCTAssertEqual(CalendarLayout.clock(fromMinutes: minutes), "10:30")
+    }
+
+    func testDropYRoundsDownWhenCloserToEarlierSnap() {
+        let minutes = CalendarLayout.minutes(atY: 10 * 50 + 5, pixelsPerHour: 50, snap: 15)
+        XCTAssertEqual(minutes, 10 * 60)
+        XCTAssertEqual(CalendarLayout.clock(fromMinutes: minutes), "10:00")
     }
 
     func testHourLabelsAreBareNumbers() {

@@ -22,7 +22,7 @@ struct DayCalendarView: View {
             topChrome
         }
         .background(Theme.calendarBackground)
-        .scrollDisabled(chrome.isResizing)
+        .scrollDisabled(chrome.pointerCaptured)
     }
 
     private var calendarScroll: some View {
@@ -43,7 +43,7 @@ struct DayCalendarView: View {
                     }
                 }
             }
-            .scrollDisabled(chrome.isResizing)
+            .scrollDisabled(chrome.pointerCaptured)
             .modifier(ScrollOffsetTracker(offset: $scrollOffset))
             .onAppear {
                 proxy.scrollTo(DateISO.dayString(from: selectedDay), anchor: .topLeading)

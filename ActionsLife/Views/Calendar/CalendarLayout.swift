@@ -56,12 +56,19 @@ enum CalendarLayout {
         return min(max(hour - 1, startHour), max(endHour - 4, startHour))
     }
 
+    static func y(fromMinutes minutes: Int, pixelsPerHour: Double) -> CGFloat {
+        let clamped = min(max(minutes, 0), endHour * 60 - 1)
+        return CGFloat(clamped) / 60 * hourHeight(pixelsPerHour: pixelsPerHour)
+    }
+
+    /// Round to the nearest snap, matching the web `snap()` helper.
     static func minutes(atY y: CGFloat, pixelsPerHour: Double, snap: Int = 15) -> Int {
         let hourH = hourHeight(pixelsPerHour: pixelsPerHour)
-        let raw = Int((Double(y) / Double(hourH) * 60).rounded())
-        let step = max(snap, 1)
-        let clamped = min(max(raw, 0), endHour * 60 - step)
-        return (clamped / step) * step
+        let raw = Double(y) / Double(hourH) * 60
+        let step = Double(max(snap, 1))
+        let snapped = (raw / step).rounded() * step
+        let maxMinutes = Double(endHour * 60 - Int(step))
+        return Int(min(max(snapped, 0), maxMinutes))
     }
 
     static func clock(fromMinutes minutes: Int) -> String {

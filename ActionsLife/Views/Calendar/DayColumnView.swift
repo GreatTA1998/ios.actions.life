@@ -50,8 +50,13 @@ struct DayColumnView: View {
                         children: store.children(of: task.id),
                         compact: true,
                         onToggle: { store.toggleDone(task.id) },
-                        onOpen: { selectedTaskID = task.id }
+                        onOpen: { selectedTaskID = task.id },
+                        onDrop: { store.applyDrop($0, taskID: task.id) }
                     )
+                }
+                if chrome.showsAllDayPreview(for: dayISO) {
+                    CalendarDropPreview(height: 12)
+                        .padding(.horizontal, 6)
                 }
             }
             .padding(.horizontal, 6)
@@ -59,12 +64,8 @@ struct DayColumnView: View {
         .padding(.top, 8)
         .padding(.bottom, 6)
         .frame(maxWidth: .infinity)
+        .background { DropZoneReporter(kind: .allDay(dayISO)) }
         .contentShape(Rectangle())
-        .dropDestination(for: String.self) { ids, _ in
-            guard let id = ids.first else { return false }
-            store.schedule(id, dayISO: dayISO, time: "")
-            return true
-        } isTargeted: { chrome.setDropTargeted($0) }
     }
 
     private var timedCanvas: some View {
@@ -75,25 +76,24 @@ struct DayColumnView: View {
                     task: event.task,
                     children: store.children(of: event.task.id),
                     onToggle: { store.toggleDone(event.task.id) },
-                    onOpen: { selectedTaskID = event.task.id }
+                    onOpen: { selectedTaskID = event.task.id },
+                    onDrop: { store.applyDrop($0, taskID: event.task.id) }
                 )
-                .frame(height: max(event.height, 36), alignment: .top)
-                .padding(.horizontal, 6)
-                .offset(y: event.y)
+                .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
+                .position(x: columnWidth / 2, y: event.y + max(event.height, 36) / 2)
+            }
+            if let preview = chrome.timedPreview(for: dayISO) {
+                CalendarDropPreview(height: preview.height)
+                    .padding(.horizontal, 6)
+                    .offset(y: preview.y)
             }
             if isToday {
                 nowIndicator
             }
         }
         .frame(width: columnWidth, height: canvasHeight, alignment: .topLeading)
+        .background { DropZoneReporter(kind: .timed(dayISO)) }
         .contentShape(Rectangle())
-        .dropDestination(for: String.self) { ids, location in
-            guard let id = ids.first else { return false }
-            let snap = max(Int(store.profile?.calSnapInterval ?? 15), 5)
-            let minutes = CalendarLayout.minutes(atY: location.y, pixelsPerHour: pixelsPerHour, snap: snap)
-            store.schedule(id, dayISO: dayISO, time: CalendarLayout.clock(fromMinutes: minutes))
-            return true
-        } isTargeted: { chrome.setDropTargeted($0) }
         .allowsHitTesting(!chrome.isResizing)
     }
 

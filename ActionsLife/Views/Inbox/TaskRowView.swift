@@ -57,7 +57,9 @@ struct TaskRowView: View {
             .padding(.vertical, 6)
             .padding(.leading, CGFloat(depth) * 18)
             .contentShape(Rectangle())
-            .draggable(tree.id)
+            .taskDragLift(id: tree.id, name: tree.task.name, duration: tree.task.duration) { target in
+                store.applyDrop(target, taskID: tree.id)
+            }
             .allowsHitTesting(!chrome.isResizing)
             .contextMenu {
                 Button("Open", systemImage: "doc.text") { selectedTaskID = tree.id }

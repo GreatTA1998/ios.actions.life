@@ -13,6 +13,7 @@ enum Theme {
     static let cardStroke = Color.black.opacity(0.10)
     static let now = Color(red: 214 / 255, green: 92 / 255, blue: 48 / 255)
     static let handle = Color.black.opacity(0.12)
+    static let dragPreview = Color(red: 100 / 255, green: 100 / 255, blue: 1)
 }
 
 enum DateISO {

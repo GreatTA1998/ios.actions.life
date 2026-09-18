@@ -47,14 +47,18 @@ struct InboxView: View {
                     .padding(.horizontal, 12)
                     .padding(.bottom, 28)
                 }
-                .scrollDisabled(chrome.isResizing)
+                .scrollDisabled(chrome.pointerCaptured)
             }
         }
         .background(Theme.listBackground)
-        .dropDestination(for: String.self) { ids, _ in
-            guard let id = ids.first else { return false }
-            store.clearSchedule(id)
-            return true
-        } isTargeted: { chrome.setDropTargeted($0) }
+        .overlay {
+            if chrome.showsListPreview() {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Theme.dragPreview.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                    .padding(8)
+                    .allowsHitTesting(false)
+            }
+        }
+        .background { DropZoneReporter(kind: .list) }
     }
 }

@@ -13,7 +13,6 @@ struct HomeView: View {
     @State private var showComposer = false
     @State private var showMenu = false
     @State private var composerParentID = ""
-    @State private var dragStartSplit: Double?
     @State private var chrome = HomeChrome()
 
     var body: some View {
@@ -39,23 +38,28 @@ struct HomeView: View {
                                 onMenu: { showMenu = true }
                             )
                             .frame(height: calendarHeight)
+                            .scrollDisabled(chrome.pointerCaptured)
+                            .allowsHitTesting(!chrome.isResizing)
 
-                            SplitHandle(
-                                enabled: !chrome.isDropTargeted,
-                                onChanged: { translation in
-                                    let start = dragStartSplit ?? store.listHeightSplit
-                                    if dragStartSplit == nil {
-                                        dragStartSplit = start
-                                        chrome.isResizing = true
-                                    }
-                                    store.setListHeightSplitLive(start - translation / geo.size.height)
-                                },
-                                onEnded: {
-                                    dragStartSplit = nil
-                                    chrome.isResizing = false
-                                    store.setListHeightSplit(store.listHeightSplit)
-                                }
-                            )
+                            SplitHandle()
+                                .highPriorityGesture(
+                                    DragGesture(minimumDistance: 0, coordinateSpace: .named("homeSplit"))
+                                        .onChanged { value in
+                                            chrome.isResizing = true
+                                            var transaction = Transaction()
+                                            transaction.disablesAnimations = true
+                                            withTransaction(transaction) {
+                                                store.setListHeightSplitLive(
+                                                    1 - value.location.y / geo.size.height
+                                                )
+                                            }
+                                        }
+                                        .onEnded { _ in
+                                            chrome.isResizing = false
+                                            store.setListHeightSplit(store.listHeightSplit)
+                                        }
+                                )
+                                .allowsHitTesting(chrome.drag == nil)
 
                             InboxView(
                                 store: store,
@@ -67,11 +71,18 @@ struct HomeView: View {
                                 }
                             )
                             .frame(maxHeight: .infinity)
-                            .scrollDisabled(chrome.isResizing)
+                            .scrollDisabled(chrome.pointerCaptured)
                             .allowsHitTesting(!chrome.isResizing)
+                        }
+                        .coordinateSpace(name: "homeSplit")
+                        .onAppear {
+                            chrome.pixelsPerHour = store.profile?.pixelsPerHour ?? 50
+                            chrome.snapInterval = max(Int(store.profile?.calSnapInterval ?? 15), 5)
                         }
                     }
                     .environment(chrome)
+                    .onPreferenceChange(DropZonePreferenceKey.self) { chrome.zones = $0 }
+                    .overlay { dragGhost }
                     .sheet(item: selectedTaskBinding(store)) { record in
                         TaskDetailSheet(store: store, taskID: record.id)
                     }
@@ -125,6 +136,30 @@ struct HomeView: View {
         }
     }
 
+    @ViewBuilder
+    private var dragGhost: some View {
+        if let drag = chrome.drag {
+            GeometryReader { geo in
+                let origin = geo.frame(in: .global)
+                let top = chrome.ghostTop
+                CalendarDropPreview(height: drag.ghostSize.height, dashed: false)
+                    .overlay(alignment: .topLeading) {
+                        Text(drag.name.isEmpty ? "Untitled" : drag.name)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(Theme.ink)
+                            .lineLimit(2)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 8)
+                    }
+                    .frame(width: drag.ghostSize.width, height: drag.ghostSize.height, alignment: .topLeading)
+                    .opacity(0.5)
+                    .shadow(color: .black.opacity(0.12), radius: 12, y: 8)
+                    .offset(x: top.x - origin.minX, y: top.y - origin.minY)
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
     private func selectedTaskBinding(_ store: TaskTreeStore) -> Binding<TaskIdentity?> {
         Binding(
             get: {
@@ -141,10 +176,6 @@ private struct TaskIdentity: Identifiable {
 }
 
 private struct SplitHandle: View {
-    var enabled: Bool
-    var onChanged: (CGFloat) -> Void
-    var onEnded: () -> Void
-
     var body: some View {
         ZStack {
             Theme.navbarBackground
@@ -157,16 +188,6 @@ private struct SplitHandle: View {
         .frame(maxWidth: .infinity)
         .frame(height: 36)
         .contentShape(Rectangle())
-        .highPriorityGesture(
-            DragGesture(minimumDistance: 2)
-                .onChanged { value in
-                    onChanged(value.translation.height)
-                }
-                .onEnded { _ in
-                    onEnded()
-                }
-        )
-        .allowsHitTesting(enabled)
         .accessibilityLabel("Resize list")
     }
 
@@ -174,5 +195,27 @@ private struct SplitHandle: View {
         Capsule()
             .fill(Theme.handle)
             .frame(width: 22, height: 1.5)
+    }
+}
+
+struct CalendarDropPreview: View {
+    var height: CGFloat
+    var dashed = true
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Theme.dragPreview.opacity(0.15))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(
+                        Theme.dragPreview.opacity(0.6),
+                        style: dashed
+                            ? StrokeStyle(lineWidth: 1, dash: [5, 4])
+                            : StrokeStyle(lineWidth: 1)
+                    )
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .allowsHitTesting(false)
     }
 }

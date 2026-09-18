@@ -6,6 +6,7 @@ struct CalendarEventCard: View {
     var compact: Bool = false
     var onToggle: () -> Void
     var onOpen: () -> Void
+    var onDrop: (HomeChrome.DropTarget) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 0 : 4) {
@@ -59,6 +60,6 @@ struct CalendarEventCard: View {
                 .stroke(Theme.cardStroke, lineWidth: 1)
         }
         .opacity(task.isDone ? 0.55 : 1)
-        .draggable(task.id)
+        .taskDragLift(id: task.id, name: task.name, duration: task.duration, onDrop: onDrop)
     }
 }
