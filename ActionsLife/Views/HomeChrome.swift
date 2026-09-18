@@ -160,12 +160,12 @@ final class HomeChrome {
         )
     }
 
-    func moveDurationResize(deltaY: CGFloat) {
+    func moveDurationResize(deltaY: CGFloat, pixelsPerHour: Double? = nil) {
         guard var session = durationResize else { return }
-        session.previewDuration = CalendarLayout.previewDuration(
+        session.previewDuration = CalendarLayout.durationFromLocationDelta(
             start: session.startDuration,
-            deltaY: deltaY,
-            pixelsPerHour: pixelsPerHour
+            locationDeltaY: deltaY,
+            pixelsPerHour: pixelsPerHour ?? self.pixelsPerHour
         )
         durationResize = session
     }

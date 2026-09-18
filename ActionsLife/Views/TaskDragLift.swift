@@ -578,6 +578,9 @@ struct HourDurationPanBridge: UIViewRepresentable {
         private var lockedOffsets: [(UIScrollView, CGPoint)] = []
         private var savedCancelContentTouches: [(UIScrollView, Bool)] = []
         private var pendingHit: CalendarLayout.DurationCapsuleTarget?
+        /// Survives recognizer `reset()` so a mid-pan state change cannot
+        /// drop the capsule that `shouldReceive` claimed.
+        private var claimedTarget: CalendarLayout.DurationCapsuleTarget?
 
         init(parent: HourDurationPanBridge) {
             self.parent = parent
@@ -659,41 +662,31 @@ struct HourDurationPanBridge: UIViewRepresentable {
             return CalendarLayout.DurationCapsuleTarget(taskID: taskID, duration: 30, rect: .zero)
         }
 
-        /// Touch-driven, not target-action: `b69d3c0` set `.began` but never
-        /// delivered `.changed`/`.ended`, so `setDuration` did not run and
-        /// `require(toFail:)` left the hour grid stuck at the locked offset.
-        func durationPanBegan(in scroll: UIScrollView?, deltaY: CGFloat) {
-            dragging = true
-            lockOffsets(from: scroll ?? pan.view)
+        /// Window `location.y` delta → `previewDuration` / `setDuration`.
+        /// Do not re-hitTest under the moved finger (that is empty hour).
+        func applyLocationDelta(_ deltaY: CGFloat) {
+            let hit = pendingHit ?? claimedTarget
+            guard let hit else { return }
+            pendingHit = hit
             restoreLockedOffsets()
-            if pendingHit == nil, let scroll {
-                if case .capsule(let target) = canvasHit(
-                    in: scroll,
-                    locationInScroll: pan.location(in: scroll)
-                ) {
-                    pendingHit = target
-                }
-            }
-            if let hit = pendingHit {
+            if !dragging {
+                dragging = true
                 parent.onBegan(hit)
             }
             parent.onChanged(deltaY)
         }
 
-        func durationPanChanged(deltaY: CGFloat) {
-            guard dragging else { return }
-            restoreLockedOffsets()
-            parent.onChanged(deltaY)
-        }
-
         func durationPanEnded(deltaY: CGFloat) {
+            applyLocationDelta(deltaY)
             guard dragging else {
                 dropClaim()
+                claimedTarget = nil
+                pendingHit = nil
                 return
             }
-            parent.onChanged(deltaY)
             dragging = false
             pendingHit = nil
+            claimedTarget = nil
             dropClaim()
             parent.onEnded()
         }
@@ -702,6 +695,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
             let wasDragging = dragging
             dragging = false
             pendingHit = nil
+            claimedTarget = nil
             dropClaim()
             if wasDragging {
                 parent.onCancel()
@@ -719,9 +713,11 @@ struct HourDurationPanBridge: UIViewRepresentable {
             if gestureRecognizer === pan {
                 if case .capsule(let target) = hit {
                     pendingHit = target
+                    claimedTarget = target
                     return true
                 }
                 pendingHit = nil
+                claimedTarget = nil
                 return false
             }
             switch hit {
@@ -787,24 +783,31 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
     }
 
-    /// Capsule pan on the hour scroller. Callbacks run from the touch
-    /// methods (window `location.y` → `previewDuration`). UIKit state is
-    /// only for `require(toFail:)` — always end or fail so hours unpin.
+    /// Capsule pan on the hour scroller. Accumulates window `location.y`
+    /// (not `location(in: nil)`, which stays 0). Stays `.possible` until
+    /// lift so a `.began` `reset()` cannot cancel `previewDuration`.
     final class DurationPanRecognizer: UIGestureRecognizer {
         weak var owner: Coordinator?
         private(set) var trackedTranslationY: CGFloat = 0
-        private var originWindowY: CGFloat = 0
         private var recognized = false
 
         override func reset() {
             super.reset()
-            originWindowY = 0
+            // Do not dropClaim / cancel while the finger is down — that
+            // wiped the session at `71817a5` so the card stayed 39pt.
+            if owner?.dragging == true { return }
             trackedTranslationY = 0
             recognized = false
-            owner?.unlockOffsets()
-            if owner?.dragging == true {
-                owner?.durationPanCancelled()
-            }
+        }
+
+        private func windowY(of touch: UITouch) -> CGFloat {
+            let space: UIView? = touch.window ?? view?.window ?? view
+            return touch.location(in: space).y
+        }
+
+        private func previousWindowY(of touch: UITouch) -> CGFloat {
+            let space: UIView? = touch.window ?? view?.window ?? view
+            return touch.previousLocation(in: space).y
         }
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
@@ -814,7 +817,6 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 owner?.unlockOffsets()
                 return
             }
-            originWindowY = touch.location(in: nil).y
             trackedTranslationY = 0
             recognized = false
             owner?.lockOffsets(from: view)
@@ -824,42 +826,26 @@ struct HourDurationPanBridge: UIViewRepresentable {
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
             super.touchesMoved(touches, with: event)
             guard let touch = touches.first else { return }
-            trackedTranslationY = touch.location(in: nil).y - originWindowY
+            trackedTranslationY += windowY(of: touch) - previousWindowY(of: touch)
             owner?.restoreLockedOffsets()
-            if !recognized {
-                if abs(trackedTranslationY) >= 8 {
-                    recognized = true
-                    owner?.durationPanBegan(
-                        in: view as? UIScrollView,
-                        deltaY: trackedTranslationY
-                    )
-                    state = .began
-                }
-            } else {
-                owner?.durationPanChanged(deltaY: trackedTranslationY)
-                state = .changed
+            if abs(trackedTranslationY) >= 8 {
+                recognized = true
+                owner?.applyLocationDelta(trackedTranslationY)
             }
             owner?.restoreLockedOffsets()
         }
 
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
             if let touch = touches.first {
-                trackedTranslationY = touch.location(in: nil).y - originWindowY
+                trackedTranslationY += windowY(of: touch) - previousWindowY(of: touch)
             }
-            if !recognized, abs(trackedTranslationY) >= 8 {
+            if recognized || abs(trackedTranslationY) >= 8 {
                 recognized = true
-                owner?.durationPanBegan(
-                    in: view as? UIScrollView,
-                    deltaY: trackedTranslationY
-                )
-            }
-            if recognized {
                 owner?.durationPanEnded(deltaY: trackedTranslationY)
-                state = .ended
             } else {
                 owner?.durationPanCancelled()
-                state = .failed
             }
+            state = .failed
             super.touchesEnded(touches, with: event)
             owner?.unlockOffsets()
         }
@@ -872,11 +858,11 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         override func canPrevent(_ other: UIGestureRecognizer) -> Bool {
-            recognized || state == .began || state == .changed
+            recognized || owner?.dragging == true
         }
 
         override func canBePrevented(by other: UIGestureRecognizer) -> Bool {
-            !(recognized || state == .began || state == .changed)
+            !(recognized || owner?.dragging == true)
         }
 
         override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {

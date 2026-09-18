@@ -795,19 +795,32 @@ final class CalendarLayoutTests: XCTestCase {
     }
 
     func testCapsulePanTranslationGrowsBlockPastThirtyMinutes() {
-        // translation.y 50pt at 50px/hour: 30 min → 90 min end instant.
-        let preview = CalendarLayout.previewDuration(start: 30, deltaY: 50, pixelsPerHour: 50)
+        // Window location.y 50pt at 50px/hour: 30 min → 90 min end instant.
+        // Painted height must exceed the 39pt 30-min capsule card.
+        let preview = CalendarLayout.durationFromLocationDelta(
+            start: 30,
+            locationDeltaY: 50,
+            pixelsPerHour: 50
+        )
         XCTAssertEqual(preview, 90, accuracy: 0.01)
         XCTAssertGreaterThan(preview, 30)
         XCTAssertEqual(CalendarLayout.snapDuration(preview, snap: 15), 90)
+        XCTAssertGreaterThan(
+            CalendarLayout.blockFrameHeight(duration: preview, y: 9 * 50, pixelsPerHour: 50),
+            39
+        )
         let chrome = HomeChrome()
         chrome.pixelsPerHour = 50
         chrome.snapInterval = 15
         chrome.beginDurationResize(taskID: "pr3", duration: 30)
-        chrome.moveDurationResize(deltaY: 50)
+        chrome.moveDurationResize(deltaY: 50, pixelsPerHour: 50)
         let result = chrome.finishDurationResize()
         XCTAssertEqual(result?.duration, 90)
         XCTAssertGreaterThan(result?.duration ?? 0, 30)
+        XCTAssertGreaterThan(
+            CalendarLayout.blockFrameHeight(duration: result?.duration ?? 0, y: 9 * 50, pixelsPerHour: 50),
+            39
+        )
     }
 
     func testHitTestFindsCardPlacedAtBlockFrameOrigin() {

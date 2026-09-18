@@ -604,8 +604,18 @@ enum CalendarLayout {
         )
     }
 
+    /// Capsule pan window `location.y` delta → minutes added to the start
+    /// instant (the event’s end). Hour height is `max(36, pixelsPerHour)`.
+    /// Web `DurationAdjuster.updateDuration`: minutes += deltaY / (pxPerHour / 60).
+    static func durationFromLocationDelta(
+        start: Double,
+        locationDeltaY: CGFloat,
+        pixelsPerHour: Double
+    ) -> Double {
+        previewDuration(start: start, deltaY: locationDeltaY, pixelsPerHour: pixelsPerHour)
+    }
+
     /// Capsule pan `translation.y` → new duration (block end instant).
-    /// Web `DurationAdjuster.updateDuration`: minutes += deltaY / (pixelsPerHour / 60).
     static func previewDuration(start: Double, deltaY: CGFloat, pixelsPerHour: Double) -> Double {
         let minutesPerPoint = 60 / Double(hourHeight(pixelsPerHour: pixelsPerHour))
         let minDuration = Double(minimumEventHeight) * minutesPerPoint
