@@ -461,9 +461,12 @@ struct HoldThenDragBridge: UIViewRepresentable {
     }
 }
 
-/// Immediate vertical pan on the visible bottom of a timed block (no long-press).
-/// The representable **is** the 28pt hit target — same pattern as SplitResizeBridge,
-/// which does bind on Simulator. A background installer / long-press overlay did not.
+/// Immediate vertical pan from the visible bottom of a timed block (no long-press).
+///
+/// The overlay UIView does not win against the hour UIScrollView pan. Install on
+/// that vertical scroller (same installer idea as lift) and only begin when the
+/// touch is in this 28pt band. Freeze ancestor scrollers in UIKit — SwiftUI
+/// `scrollDisabled` rebuilds the canvas and cancels the gesture.
 struct DurationResizeBridge: UIViewRepresentable {
     var enabled: Bool
     var onBegan: () -> Void
@@ -475,58 +478,56 @@ struct DurationResizeBridge: UIViewRepresentable {
         Coordinator(parent: self)
     }
 
-    func makeUIView(context: Context) -> HandleView {
-        let view = HandleView()
+    func makeUIView(context: Context) -> InstallerView {
+        let view = InstallerView()
         view.coordinator = context.coordinator
-        context.coordinator.attach(to: view)
         return view
     }
 
-    func updateUIView(_ uiView: HandleView, context: Context) {
+    func updateUIView(_ uiView: InstallerView, context: Context) {
         context.coordinator.parent = self
-        context.coordinator.pan.isEnabled = enabled
+        context.coordinator.pan?.isEnabled = enabled
         uiView.coordinator = context.coordinator
-        context.coordinator.attach(to: uiView)
+        uiView.ensureInstalled()
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: DurationResizeBridge
-        let pan = UIPanGestureRecognizer()
+        weak var pan: DurationPanRecognizer?
+        weak var handleHost: UIView?
         private var dragging = false
+        private var startY: CGFloat = 0
+        private var frozen: [UIScrollView] = []
 
         init(parent: DurationResizeBridge) {
             self.parent = parent
-            super.init()
-            pan.addTarget(self, action: #selector(handlePan(_:)))
-            pan.delegate = self
-            pan.cancelsTouchesInView = true
-            pan.maximumNumberOfTouches = 1
-        }
-
-        func attach(to view: UIView) {
-            guard pan.view !== view else { return }
-            pan.view?.removeGestureRecognizer(pan)
-            view.addGestureRecognizer(pan)
         }
 
         @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
-            let dy = gesture.translation(in: gesture.view).y
+            let y = gesture.location(in: nil).y
             switch gesture.state {
             case .began:
                 dragging = true
+                startY = y
+                freezeScrollers(from: gesture.view)
                 parent.onBegan()
-                parent.onChanged(dy)
+                parent.onChanged(0)
             case .changed:
                 guard dragging else { return }
-                parent.onChanged(dy)
+                freezeScrollers(from: gesture.view)
+                parent.onChanged(y - startY)
             case .ended:
                 guard dragging else { return }
                 dragging = false
+                unfreezeScrollers()
                 parent.onEnded()
             case .cancelled, .failed:
                 if dragging {
                     dragging = false
+                    unfreezeScrollers()
                     parent.onCancel()
+                } else {
+                    unfreezeScrollers()
                 }
             default:
                 break
@@ -537,29 +538,109 @@ struct DurationResizeBridge: UIViewRepresentable {
             parent.enabled
         }
 
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard parent.enabled, let host = handleHost else { return false }
+            let frame = host.convert(host.bounds, to: nil).insetBy(dx: -6, dy: -10)
+            return frame.contains(touch.location(in: nil))
+        }
+
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
         ) -> Bool {
             false
         }
+
+        private func freezeScrollers(from view: UIView?) {
+            var found: [UIScrollView] = []
+            var current = view
+            while let node = current {
+                if let scroll = node as? UIScrollView {
+                    found.append(scroll)
+                    scroll.isScrollEnabled = false
+                }
+                current = node.superview
+            }
+            frozen = found
+        }
+
+        private func unfreezeScrollers() {
+            for scroll in frozen {
+                scroll.isScrollEnabled = true
+            }
+            frozen = []
+        }
     }
 
-    final class HandleView: UIView {
+    final class DurationPanRecognizer: UIPanGestureRecognizer {
+        override func canPrevent(_ other: UIGestureRecognizer) -> Bool {
+            other.view is UIScrollView
+        }
+
+        override func canBePrevented(by other: UIGestureRecognizer) -> Bool {
+            if other.view is UIScrollView { return false }
+            return super.canBePrevented(by: other)
+        }
+    }
+
+    final class InstallerView: UIView {
         weak var coordinator: Coordinator?
+        private weak var installedOn: UIView?
+        private var retries = 0
 
-        override init(frame: CGRect) {
-            super.init(frame: frame)
-            backgroundColor = .clear
-            isUserInteractionEnabled = true
-            isMultipleTouchEnabled = false
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            ensureInstalled()
         }
 
-        override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-            bounds.insetBy(dx: 0, dy: -8).contains(point)
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            ensureInstalled()
         }
 
-        @available(*, unavailable)
-        required init?(coder: NSCoder) { nil }
+        func ensureInstalled() {
+            guard let coordinator else { return }
+            coordinator.handleHost = superview
+            guard let scroll = nearestVerticalScrollView() else {
+                guard retries < 16 else { return }
+                retries += 1
+                DispatchQueue.main.async { [weak self] in self?.ensureInstalled() }
+                return
+            }
+            retries = 0
+            if installedOn === scroll, coordinator.pan != nil { return }
+            if let old = coordinator.pan {
+                old.view?.removeGestureRecognizer(old)
+            }
+            let pan = DurationPanRecognizer(
+                target: coordinator,
+                action: #selector(Coordinator.handlePan(_:))
+            )
+            pan.delegate = coordinator
+            pan.cancelsTouchesInView = true
+            pan.maximumNumberOfTouches = 1
+            scroll.addGestureRecognizer(pan)
+            coordinator.pan = pan
+            installedOn = scroll
+            isUserInteractionEnabled = false
+        }
+
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            nil
+        }
+
+        /// Prefer the hour canvas (taller than its bounds). Never the day strip.
+        private func nearestVerticalScrollView() -> UIScrollView? {
+            var view: UIView? = superview
+            while let current = view {
+                if let scroll = current as? UIScrollView,
+                   scroll.contentSize.height > scroll.bounds.height + 1
+                {
+                    return scroll
+                }
+                view = current.superview
+            }
+            return nil
+        }
     }
 }

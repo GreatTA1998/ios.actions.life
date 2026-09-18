@@ -194,6 +194,23 @@ final class DragDropTests: XCTestCase {
         XCTAssertNil(chrome.durationResize)
     }
 
+    func testDurationPanDownLengthensBlock() {
+        let chrome = HomeChrome()
+        chrome.pixelsPerHour = 50
+        chrome.snapInterval = 15
+        chrome.beginDurationResize(taskID: "block", duration: 30)
+        chrome.moveDurationResize(deltaY: 74)
+        let result = chrome.finishDurationResize()
+        XCTAssertEqual(
+            result?.duration,
+            CalendarLayout.snapDuration(
+                CalendarLayout.previewDuration(start: 30, deltaY: 74, pixelsPerHour: 50),
+                snap: 15
+            )
+        )
+        XCTAssertGreaterThan(result?.duration ?? 0, 30)
+    }
+
     func testLiftIgnoresDurationHandleBand() {
         XCTAssertEqual(HomeChrome.durationHandleHit, 28)
         let card = CGRect(x: 0, y: 0, width: 200, height: 36)
