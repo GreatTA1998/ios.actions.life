@@ -106,19 +106,27 @@ struct DayColumnView: View {
         ZStack(alignment: .topLeading) {
             hourGrid
             ForEach(placed) { event in
-                CalendarEventCard(
-                    task: event.task,
-                    children: store.children(of: event.task.id),
-                    onToggle: { store.toggleDone(event.task.id) },
-                    onOpen: { selectedTaskID = event.task.id },
-                    onToggleChild: { store.toggleDone($0) },
-                    onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) },
-                    onResizeDuration: { store.setDuration(event.task.id, minutes: $0) }
-                )
-                .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
-                // Tight card + handle. A canvas-height capsule overlay sat on empty
-                // hour 2 (`23f0dce`) and ate SpatialTap. Do not restore that overlay.
-                .offset(x: 6, y: event.y)
+                // Spacer above the card only — never a canvas-height fill (that
+                // put capsules on empty hours). Layout, not `.offset`, so the
+                // UIKit duration pan sits on the visible capsule and can freeze
+                // the hour scroller.
+                VStack(alignment: .leading, spacing: 0) {
+                    Color.clear
+                        .frame(height: max(0, event.y))
+                        .allowsHitTesting(false)
+                    CalendarEventCard(
+                        task: event.task,
+                        children: store.children(of: event.task.id),
+                        onToggle: { store.toggleDone(event.task.id) },
+                        onOpen: { selectedTaskID = event.task.id },
+                        onToggleChild: { store.toggleDone($0) },
+                        onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) },
+                        onResizeDuration: { store.setDuration(event.task.id, minutes: $0) }
+                    )
+                    .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
+                    .padding(.leading, 6)
+                }
+                .frame(width: columnWidth, alignment: .topLeading)
             }
             if let preview = chrome.timedPreview(for: dayISO) {
                 CalendarDropPreview(height: preview.height)

@@ -463,8 +463,10 @@ struct HoldThenDragBridge: UIViewRepresentable {
 
 /// Immediate pan on the visible duration capsule (no long-press).
 ///
-/// Lives on the timed card, not in a canvas-height overlay (those capsules
-/// sat on empty hour 2 and ate SpatialTap). Empty hours hit the hour grid.
+/// Must sit in **layout** on the card (spacer + card, no canvas-height fill).
+/// `.offset` left the UIKit handle at hour 0, so a capsule pan scrolled the
+/// grid (`29bea39`). Freeze ancestor scrollers on touch-down, before UIScrollView
+/// takes the drag. Empty hours below the card still hit the hour grid.
 struct DurationResizeBridge: UIViewRepresentable {
     var enabled: Bool
     var onBegan: () -> Void
@@ -506,10 +508,15 @@ struct DurationResizeBridge: UIViewRepresentable {
             pan.maximumNumberOfTouches = 1
         }
 
+        deinit {
+            unfreezeScrollers()
+        }
+
         func attach(to view: UIView) {
             guard pan.view !== view else { return }
             pan.view?.removeGestureRecognizer(pan)
             view.addGestureRecognizer(pan)
+            prepScrollers(from: view)
         }
 
         @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
@@ -554,24 +561,52 @@ struct DurationResizeBridge: UIViewRepresentable {
             false
         }
 
-        private func freezeScrollers(from view: UIView?) {
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldBeRequiredToFailBy other: UIGestureRecognizer
+        ) -> Bool {
+            false
+        }
+
+        func prepScrollers(from view: UIView?) {
+            for scroll in ancestorScrollers(from: view) {
+                scroll.delaysContentTouches = false
+            }
+        }
+
+        func freezeScrollers(from view: UIView?) {
+            let found = ancestorScrollers(from: view)
+            for scroll in found {
+                scroll.delaysContentTouches = false
+                scroll.isScrollEnabled = false
+                scroll.panGestureRecognizer.isEnabled = false
+            }
+            frozen = found
+        }
+
+        func unfreezeIfIdle() {
+            guard !dragging else { return }
+            unfreezeScrollers()
+        }
+
+        private func unfreezeScrollers() {
+            for scroll in frozen {
+                scroll.panGestureRecognizer.isEnabled = true
+                scroll.isScrollEnabled = true
+            }
+            frozen = []
+        }
+
+        private func ancestorScrollers(from view: UIView?) -> [UIScrollView] {
             var found: [UIScrollView] = []
             var current = view
             while let node = current {
                 if let scroll = node as? UIScrollView {
                     found.append(scroll)
-                    scroll.isScrollEnabled = false
                 }
                 current = node.superview
             }
-            frozen = found
-        }
-
-        private func unfreezeScrollers() {
-            for scroll in frozen {
-                scroll.isScrollEnabled = true
-            }
-            frozen = []
+            return found
         }
     }
 
@@ -581,6 +616,10 @@ struct DurationResizeBridge: UIViewRepresentable {
         }
 
         override func canBePrevented(by other: UIGestureRecognizer) -> Bool {
+            false
+        }
+
+        override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {
             false
         }
     }
@@ -594,6 +633,31 @@ struct DurationResizeBridge: UIViewRepresentable {
             isUserInteractionEnabled = true
             isMultipleTouchEnabled = false
             isExclusiveTouch = true
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            coordinator?.prepScrollers(from: self)
+        }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            coordinator?.prepScrollers(from: self)
+        }
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+            coordinator?.freezeScrollers(from: self)
+            super.touchesBegan(touches, with: event)
+        }
+
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+            super.touchesEnded(touches, with: event)
+            coordinator?.unfreezeIfIdle()
+        }
+
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+            super.touchesCancelled(touches, with: event)
+            coordinator?.unfreezeIfIdle()
         }
 
         override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {

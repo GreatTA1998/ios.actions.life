@@ -99,8 +99,9 @@ struct CalendarEventCard: View {
     }
 }
 
-/// 28pt duration edge on the visible card. Must not live in a canvas-height
-/// overlay — that painted stray capsules on empty hour 2 (`23f0dce`).
+/// 28pt duration edge on the visible card. Layout (not `.offset`) so the
+/// UIKit pan sits on the capsule and can freeze the hour scroller. Do not wrap
+/// this in a canvas-height stack — that painted stray capsules on empty hours.
 struct DurationEdgeHandle: View {
     let task: TaskSnapshot
     var onResize: (Double) -> Void
