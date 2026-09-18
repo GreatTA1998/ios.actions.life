@@ -4,6 +4,10 @@ struct DayCalendarView: View {
     @Bindable var store: TaskTreeStore
     @Binding var selectedDay: Date
     @Binding var selectedTaskID: String?
+    @Binding var calendarComposer: CalendarComposer?
+    @Binding var composerText: String
+    var onCommitComposer: () -> Void
+    var onCancelComposer: () -> Void
     var columnWidth: CGFloat
     var onJumpToday: () -> Void
     var onMenu: () -> Void
@@ -39,7 +43,11 @@ struct DayCalendarView: View {
                             tasks: store.tasks(on: DateISO.dayString(from: day)),
                             pixelsPerHour: pixelsPerHour,
                             columnWidth: columnWidth,
-                            selectedTaskID: $selectedTaskID
+                            selectedTaskID: $selectedTaskID,
+                            calendarComposer: $calendarComposer,
+                            composerText: $composerText,
+                            onCommitComposer: onCommitComposer,
+                            onCancelComposer: onCancelComposer
                         )
                         .id(DateISO.dayString(from: day))
                     }
@@ -51,6 +59,9 @@ struct DayCalendarView: View {
             .onAppear {
                 scrolledDayID = DateISO.dayString(from: selectedDay)
                 proxy.scrollTo(DateISO.dayString(from: selectedDay), anchor: .topLeading)
+                DispatchQueue.main.async {
+                    proxy.scrollTo("scroll-now", anchor: .top)
+                }
             }
             .onChange(of: selectedDay) { _, day in
                 scrolledDayID = DateISO.dayString(from: day)

@@ -11,6 +11,7 @@ struct HomeView: View {
     @State private var selectedTaskID: String?
     @State private var composerText = ""
     @State private var composer: ComposerSlot?
+    @State private var calendarComposer: CalendarComposer?
     @State private var showMenu = false
     @State private var chrome = HomeChrome()
     /// Local split while dragging the handle (Expo SplitPane `visual`).
@@ -37,6 +38,10 @@ struct HomeView: View {
                                 store: store,
                                 selectedDay: $selectedDay,
                                 selectedTaskID: $selectedTaskID,
+                                calendarComposer: $calendarComposer,
+                                composerText: $composerText,
+                                onCommitComposer: { commitComposer(store) },
+                                onCancelComposer: cancelComposer,
                                 columnWidth: columnWidth,
                                 onJumpToday: {
                                     selectedDay = Calendar.current.startOfDay(for: .now)
@@ -129,6 +134,12 @@ struct HomeView: View {
                     }
                     .environment(chrome)
                     .onPreferenceChange(DropZonePreferenceKey.self) { chrome.zones = $0 }
+                    .onChange(of: composer) { _, value in
+                        if value != nil { calendarComposer = nil }
+                    }
+                    .onChange(of: calendarComposer) { _, value in
+                        if value != nil { composer = nil }
+                    }
                     .overlay { dragGhost }
                     .onReceive(edgeTick) { _ in
                         guard chrome.drag != nil, let finger = chrome.drag?.finger else { return }
@@ -141,6 +152,7 @@ struct HomeView: View {
                     .confirmationDialog("actions.life", isPresented: $showMenu, titleVisibility: .visible) {
                         Button("Add task") {
                             composerText = ""
+                            calendarComposer = nil
                             composer = ComposerSlot(parentID: "", index: store.inbox.count)
                         }
                         Button("Jump to today") {
@@ -197,11 +209,30 @@ struct HomeView: View {
 
     private func commitComposer(_ store: TaskTreeStore) {
         let name = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !name.isEmpty, let slot = composer {
-            if !slot.parentID.isEmpty {
-                store.setCollapsed(slot.parentID, isCollapsed: false)
+        if !name.isEmpty {
+            if let slot = composer {
+                if !slot.parentID.isEmpty {
+                    store.setCollapsed(slot.parentID, isCollapsed: false)
+                }
+                store.create(name: name, parentID: slot.parentID, insertIndex: slot.index)
+            } else if let cal = calendarComposer {
+                switch cal {
+                case .timed(let dayISO, let minutes):
+                    store.create(
+                        name: name,
+                        onList: false,
+                        startDateISO: dayISO,
+                        startTime: CalendarLayout.clock(fromMinutes: minutes)
+                    )
+                case .allDay(let dayISO):
+                    store.create(
+                        name: name,
+                        onList: false,
+                        startDateISO: dayISO,
+                        startTime: ""
+                    )
+                }
             }
-            store.create(name: name, parentID: slot.parentID, insertIndex: slot.index)
         }
         cancelComposer()
     }
@@ -209,6 +240,7 @@ struct HomeView: View {
     private func cancelComposer() {
         composerText = ""
         composer = nil
+        calendarComposer = nil
     }
 
     private func selectedTaskBinding(_ store: TaskTreeStore) -> Binding<TaskIdentity?> {

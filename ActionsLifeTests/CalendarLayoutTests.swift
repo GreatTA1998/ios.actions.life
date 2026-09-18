@@ -52,6 +52,32 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(CalendarLayout.hourLabel(0), "0")
     }
 
+    func testPreviewDurationMatchesWebPixelsPerHour() {
+        // 50 px/hour → 1.2 minutes per point; +50pt adds 60 minutes.
+        let preview = CalendarLayout.previewDuration(start: 30, deltaY: 50, pixelsPerHour: 50)
+        XCTAssertEqual(preview, 90, accuracy: 0.01)
+        let floor = CalendarLayout.previewDuration(start: 5, deltaY: -400, pixelsPerHour: 50)
+        XCTAssertEqual(floor, Double(CalendarLayout.minimumEventHeight) / 50 * 60, accuracy: 0.01)
+    }
+
+    func testSnapDurationRoundsToInterval() {
+        XCTAssertEqual(CalendarLayout.snapDuration(37, snap: 15), 30)
+        XCTAssertEqual(CalendarLayout.snapDuration(38, snap: 15), 45)
+        XCTAssertEqual(CalendarLayout.snapDuration(2, snap: 15), 15)
+    }
+
+    func testNowScrollYLeavesHeadroom() {
+        let calendar = Calendar(identifier: .gregorian)
+        var comps = DateComponents(year: 2026, month: 9, day: 18, hour: 10, minute: 0)
+        comps.timeZone = calendar.timeZone
+        let now = calendar.date(from: comps) ?? Date()
+        XCTAssertEqual(
+            CalendarLayout.nowScrollY(now: now, calendar: calendar, pixelsPerHour: 50, headroom: 48),
+            10 * 50 - 48,
+            accuracy: 0.01
+        )
+    }
+
     func testDayWindowIsPastPlusTodayPlusFuture() {
         let calendar = Calendar(identifier: .gregorian)
         var comps = DateComponents(year: 2026, month: 9, day: 18)

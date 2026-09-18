@@ -22,6 +22,8 @@ final class HomeChrome {
     var snapInterval = 15
     var zones: [DropZone] = []
     var drag: DragSession?
+    /// Live duration while dragging the calendar block's bottom edge (web `DurationAdjuster`).
+    var durationResize: DurationResizeSession?
 
     /// Global frames of the calendar / list panes (for clipping + edge scroll).
     var calendarPane: CGRect = .null
@@ -34,7 +36,7 @@ final class HomeChrome {
     /// Bumped every edge-scroll tick so bridges re-apply a steady delta.
     var edgeScrollGeneration: Int = 0
 
-    var pointerCaptured: Bool { isResizing || isLifting || drag != nil }
+    var pointerCaptured: Bool { isResizing || isLifting || drag != nil || durationResize != nil }
 
     struct DropZone: Equatable {
         enum Kind: Equatable {
@@ -67,6 +69,12 @@ final class HomeChrome {
         case nest(String)
         case allDay(String)
         case timed(dayISO: String, minutes: Int)
+    }
+
+    struct DurationResizeSession: Equatable {
+        var taskID: String
+        var startDuration: Double
+        var previewDuration: Double
     }
 
     var ghostTop: CGPoint {
@@ -134,6 +142,35 @@ final class HomeChrome {
         calendarScrollDelta = .zero
         listScrollDelta = .zero
         drag = nil
+    }
+
+    func beginDurationResize(taskID: String, duration: Double) {
+        cancelDrag()
+        durationResize = DurationResizeSession(
+            taskID: taskID,
+            startDuration: duration,
+            previewDuration: duration
+        )
+    }
+
+    func moveDurationResize(deltaY: CGFloat) {
+        guard var session = durationResize else { return }
+        session.previewDuration = CalendarLayout.previewDuration(
+            start: session.startDuration,
+            deltaY: deltaY,
+            pixelsPerHour: pixelsPerHour
+        )
+        durationResize = session
+    }
+
+    func finishDurationResize() -> (taskID: String, duration: Double)? {
+        guard let session = durationResize else { return nil }
+        durationResize = nil
+        return (session.taskID, CalendarLayout.snapDuration(session.previewDuration, snap: snapInterval))
+    }
+
+    func cancelDurationResize() {
+        durationResize = nil
     }
 
     func updateEdgeScroll(finger: CGPoint) {

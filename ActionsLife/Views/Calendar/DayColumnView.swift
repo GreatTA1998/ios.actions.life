@@ -7,13 +7,23 @@ struct DayColumnView: View {
     let pixelsPerHour: Double
     let columnWidth: CGFloat
     @Binding var selectedTaskID: String?
+    @Binding var calendarComposer: CalendarComposer?
+    @Binding var composerText: String
+    var onCommitComposer: () -> Void
+    var onCancelComposer: () -> Void
     @Environment(HomeChrome.self) private var chrome
 
     private var hourHeight: CGFloat { CalendarLayout.hourHeight(pixelsPerHour: pixelsPerHour) }
     private var canvasHeight: CGFloat { CalendarLayout.canvasHeight(pixelsPerHour: pixelsPerHour) }
     private var split: (allDay: [TaskSnapshot], timed: [TaskSnapshot]) { CalendarLayout.split(tasks: tasks) }
     private var placed: [CalendarLayout.PlacedEvent] {
-        CalendarLayout.placeTimed(split.timed, pixelsPerHour: pixelsPerHour)
+        var timed = split.timed
+        if let session = chrome.durationResize,
+           let index = timed.firstIndex(where: { $0.id == session.taskID })
+        {
+            timed[index].duration = session.previewDuration
+        }
+        return CalendarLayout.placeTimed(timed, pixelsPerHour: pixelsPerHour)
     }
     private var dayISO: String { DateISO.dayString(from: day) }
     private var isToday: Bool { Calendar.current.isDateInToday(day) }
@@ -42,6 +52,10 @@ struct DayColumnView: View {
             .font(.subheadline.weight(.medium))
             .foregroundStyle(Theme.ink)
             .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: beginAllDayComposer)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel("Add all-day task")
 
             VStack(spacing: 4) {
                 ForEach(split.allDay) { task in
@@ -51,6 +65,7 @@ struct DayColumnView: View {
                         compact: true,
                         onToggle: { store.toggleDone(task.id) },
                         onOpen: { selectedTaskID = task.id },
+                        onToggleChild: { store.toggleDone($0) },
                         onDrop: { store.applyDrop($0, taskID: task.id, fromCalendar: true) }
                     )
                 }
@@ -58,6 +73,23 @@ struct DayColumnView: View {
                     CalendarDropPreview(height: 12)
                         .padding(.horizontal, 6)
                 }
+                if case .allDay(let iso) = calendarComposer, iso == dayISO {
+                    InlineTaskComposer(
+                        text: $composerText,
+                        font: .subheadline,
+                        onSubmit: onCommitComposer,
+                        onCancel: onCancelComposer
+                    )
+                    .padding(.horizontal, 6)
+                    .zIndex(4)
+                }
+                Color.clear
+                    .frame(height: 18)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: beginAllDayComposer)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel("Add all-day task")
             }
             .padding(.horizontal, 6)
         }
@@ -77,7 +109,9 @@ struct DayColumnView: View {
                     children: store.children(of: event.task.id),
                     onToggle: { store.toggleDone(event.task.id) },
                     onOpen: { selectedTaskID = event.task.id },
-                    onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) }
+                    onToggleChild: { store.toggleDone($0) },
+                    onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) },
+                    onResizeDuration: { store.setDuration(event.task.id, minutes: $0) }
                 )
                 .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
                 .position(x: columnWidth / 2, y: event.y + max(event.height, 36) / 2)
@@ -87,8 +121,23 @@ struct DayColumnView: View {
                     .padding(.horizontal, 6)
                     .offset(y: preview.y)
             }
+            if case .timed(let iso, let minutes) = calendarComposer, iso == dayISO {
+                InlineTaskComposer(
+                    text: $composerText,
+                    font: .subheadline,
+                    onSubmit: onCommitComposer,
+                    onCancel: onCancelComposer
+                )
+                .padding(.horizontal, 6)
+                .offset(y: CalendarLayout.y(fromMinutes: minutes, pixelsPerHour: pixelsPerHour))
+                .zIndex(8)
+            }
             if isToday {
                 nowIndicator
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .id("scroll-now")
+                    .position(x: 8, y: CalendarLayout.nowScrollY(pixelsPerHour: pixelsPerHour) + 0.5)
             }
         }
         .frame(width: columnWidth, height: canvasHeight, alignment: .topLeading)
@@ -108,6 +157,21 @@ struct DayColumnView: View {
                 .frame(height: hourHeight)
             }
         }
+        .contentShape(Rectangle())
+        .gesture(
+            SpatialTapGesture().onEnded { event in
+                guard chrome.drag == nil, !chrome.isResizing, chrome.durationResize == nil else { return }
+                let minutes = CalendarLayout.minutes(
+                    atY: event.location.y,
+                    pixelsPerHour: pixelsPerHour,
+                    snap: chrome.snapInterval
+                )
+                composerText = ""
+                calendarComposer = .timed(dayISO: dayISO, minutes: minutes)
+            }
+        )
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("Add timed task")
     }
 
     private var nowIndicator: some View {
@@ -125,5 +189,11 @@ struct DayColumnView: View {
         }
         .frame(height: canvasHeight, alignment: .top)
         .allowsHitTesting(false)
+    }
+
+    private func beginAllDayComposer() {
+        guard chrome.drag == nil, !chrome.isResizing, chrome.durationResize == nil else { return }
+        composerText = ""
+        calendarComposer = .allDay(dayISO: dayISO)
     }
 }

@@ -6,7 +6,9 @@ struct CalendarEventCard: View {
     var compact: Bool = false
     var onToggle: () -> Void
     var onOpen: () -> Void
+    var onToggleChild: (String) -> Void = { _ in }
     var onDrop: (HomeChrome.DropTarget) -> Void
+    var onResizeDuration: (Double) -> Void = { _ in }
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
@@ -36,19 +38,33 @@ struct CalendarEventCard: View {
                 }
             }
 
+            if !compact, !task.notes.isEmpty {
+                Text(task.notes)
+                    .font(.caption)
+                    .foregroundStyle(Theme.secondaryInk)
+                    .lineLimit(4)
+            }
+
             if !compact {
                 ForEach(children.prefix(6)) { child in
-                    HStack(spacing: 6) {
-                        Image(systemName: child.isDone ? "checkmark.circle.fill" : "circle")
-                            .font(.subheadline)
-                            .foregroundStyle(child.isDone ? Theme.accent : Theme.ink.opacity(0.45))
-                        Text(child.name.isEmpty ? "Untitled" : child.name)
-                            .font(.subheadline)
-                            .strikethrough(child.isDone)
-                            .foregroundStyle(Theme.ink)
-                            .lineLimit(1)
+                    Button {
+                        onToggleChild(child.id)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: child.isDone ? "checkmark.circle.fill" : "circle")
+                                .font(.subheadline)
+                                .foregroundStyle(child.isDone ? Theme.accent : Theme.ink.opacity(0.45))
+                            Text(child.name.isEmpty ? "Untitled" : child.name)
+                                .font(.subheadline)
+                                .strikethrough(child.isDone)
+                                .foregroundStyle(Theme.ink)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
                     }
+                    .buttonStyle(.plain)
                     .padding(.leading, 22)
+                    .accessibilityLabel(child.isDone ? "Mark \(child.name) not done" : "Mark \(child.name) done")
                 }
             }
         }
@@ -70,7 +86,41 @@ struct CalendarEventCard: View {
                     )
             }
         }
+        .overlay(alignment: .bottom) {
+            if !compact {
+                durationHandle
+            }
+        }
         .background { DropZoneReporter(kind: .nest(task.id)) }
         .taskDragLift(id: task.id, name: task.name, duration: task.duration, fromCalendar: true, onDrop: onDrop)
+    }
+
+    private var durationHandle: some View {
+        ZStack(alignment: .bottom) {
+            if chrome.durationResize?.taskID == task.id {
+                Rectangle()
+                    .fill(Theme.dragPreview.opacity(0.85))
+                    .frame(height: 1)
+            }
+            DurationResizeBridge(
+                enabled: chrome.drag == nil && !chrome.isResizing
+                    && (chrome.durationResize == nil || chrome.durationResize?.taskID == task.id),
+                holdDelay: HomeChrome.holdDelay,
+                slop: HomeChrome.touchSlop,
+                onBegan: {
+                    chrome.beginDurationResize(taskID: task.id, duration: task.duration)
+                },
+                onChanged: { chrome.moveDurationResize(deltaY: $0) },
+                onEnded: {
+                    if let result = chrome.finishDurationResize() {
+                        onResizeDuration(result.duration)
+                    }
+                },
+                onCancel: { chrome.cancelDurationResize() }
+            )
+        }
+        .frame(height: 22)
+        .offset(y: 8)
+        .accessibilityLabel("Resize duration")
     }
 }

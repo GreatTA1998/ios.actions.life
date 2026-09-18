@@ -176,4 +176,26 @@ final class DragDropTests: XCTestCase {
         )
         XCTAssertNil(clipped)
     }
+
+    func testDurationResizeCapturesPointerAndSnaps() {
+        let chrome = HomeChrome()
+        chrome.pixelsPerHour = 50
+        chrome.snapInterval = 15
+        XCTAssertFalse(chrome.pointerCaptured)
+        chrome.beginDurationResize(taskID: "block", duration: 30)
+        XCTAssertTrue(chrome.pointerCaptured)
+        chrome.moveDurationResize(deltaY: 50)
+        let result = chrome.finishDurationResize()
+        XCTAssertEqual(result?.taskID, "block")
+        XCTAssertEqual(result?.duration, 90)
+        XCTAssertFalse(chrome.pointerCaptured)
+        XCTAssertNil(chrome.durationResize)
+    }
+
+    func testCancelDurationResizeClearsPointerCapture() {
+        let chrome = HomeChrome()
+        chrome.beginDurationResize(taskID: "block", duration: 30)
+        chrome.cancelDurationResize()
+        XCTAssertFalse(chrome.pointerCaptured)
+    }
 }

@@ -362,3 +362,102 @@ struct HoldThenDragBridge: UIViewRepresentable {
         }
     }
 }
+
+/// Web `DurationAdjuster`: hold 150ms on the block's bottom edge, then drag vertically.
+/// Always clears on ended/cancelled/failed so scroll is not left disabled.
+struct DurationResizeBridge: UIViewRepresentable {
+    var enabled: Bool
+    var holdDelay: TimeInterval
+    var slop: CGFloat
+    var onBegan: () -> Void
+    var onChanged: (_ translationY: CGFloat) -> Void
+    var onEnded: () -> Void
+    var onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIView(context: Context) -> HandleView {
+        let view = HandleView()
+        context.coordinator.attach(to: view)
+        return view
+    }
+
+    func updateUIView(_ uiView: HandleView, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.press.isEnabled = enabled
+        context.coordinator.press.minimumPressDuration = holdDelay
+        context.coordinator.press.allowableMovement = slop
+        context.coordinator.attach(to: uiView)
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: DurationResizeBridge
+        let press = UILongPressGestureRecognizer()
+        private var dragging = false
+        private var startY: CGFloat = 0
+
+        init(parent: DurationResizeBridge) {
+            self.parent = parent
+            super.init()
+            press.addTarget(self, action: #selector(handlePress(_:)))
+            press.delegate = self
+            press.minimumPressDuration = parent.holdDelay
+            press.allowableMovement = parent.slop
+            press.cancelsTouchesInView = true
+        }
+
+        func attach(to view: UIView) {
+            guard press.view !== view else { return }
+            press.view?.removeGestureRecognizer(press)
+            view.addGestureRecognizer(press)
+        }
+
+        @objc func handlePress(_ gesture: UILongPressGestureRecognizer) {
+            let y = gesture.location(in: nil).y
+            switch gesture.state {
+            case .began:
+                dragging = true
+                startY = y
+                parent.onBegan()
+            case .changed:
+                guard dragging else { return }
+                parent.onChanged(y - startY)
+            case .ended:
+                guard dragging else { return }
+                dragging = false
+                parent.onEnded()
+            case .cancelled, .failed:
+                if dragging {
+                    dragging = false
+                    parent.onCancel()
+                }
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            parent.enabled
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+        ) -> Bool {
+            !dragging
+        }
+    }
+
+    final class HandleView: UIView {
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            backgroundColor = .clear
+            isUserInteractionEnabled = true
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { nil }
+    }
+}

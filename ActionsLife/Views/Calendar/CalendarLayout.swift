@@ -85,6 +85,23 @@ enum CalendarLayout {
         return CGFloat(minutes) / 60 * hourHeight(pixelsPerHour: pixelsPerHour)
     }
 
+    /// Web `jumpToToday` vertical offset: now minus 48pt headroom.
+    static func nowScrollY(now: Date = .now, calendar: Calendar = .current, pixelsPerHour: Double, headroom: CGFloat = 48) -> CGFloat {
+        max(0, nowY(now: now, calendar: calendar, pixelsPerHour: pixelsPerHour) - headroom)
+    }
+
+    /// Web `DurationAdjuster.updateDuration`: minutes += deltaY / (pixelsPerHour / 60).
+    static func previewDuration(start: Double, deltaY: CGFloat, pixelsPerHour: Double) -> Double {
+        let minutesPerPoint = 60 / Double(hourHeight(pixelsPerHour: pixelsPerHour))
+        let minDuration = Double(minimumEventHeight) * minutesPerPoint
+        return max(minDuration, start + Double(deltaY) * minutesPerPoint)
+    }
+
+    static func snapDuration(_ duration: Double, snap: Int) -> Double {
+        let step = Double(max(snap, 1))
+        return max(step, (duration / step).rounded() * step)
+    }
+
     static func dayWindow(
         around now: Date = .now,
         past: Int,
