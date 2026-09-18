@@ -147,6 +147,34 @@ enum TreeMaintenance {
         maxOrderValue + 1
     }
 
+    /// Same as the web `computeOrderValue(i, rooms)` helper.
+    static func orderValue(insertingAt index: Int, among rooms: [TaskSnapshot]) -> Double {
+        let n = rooms.count
+        if n == 0 { return 1 }
+        if index <= 0 { return rooms[0].orderValue / 1.1 }
+        if index >= n { return rooms[n - 1].orderValue + 1 }
+        return (rooms[index - 1].orderValue + rooms[index].orderValue) / 2
+    }
+
+    static func applyPlaceOnList(
+        taskID: String,
+        parentID: String,
+        orderValue: Double,
+        unschedule: Bool,
+        docs: inout [TaskSnapshot]
+    ) {
+        applyReparent(taskID: taskID, newParentID: parentID, docs: &docs)
+        guard let index = docs.firstIndex(where: { $0.id == taskID }) else { return }
+        docs[index].orderValue = orderValue
+        docs[index].onList = true
+        if unschedule {
+            applyDateChange(taskID: taskID, newDate: "", docs: &docs)
+            if let i = docs.firstIndex(where: { $0.id == taskID }) {
+                docs[i].startTime = ""
+            }
+        }
+    }
+
     static func previousSibling(of id: String, in forest: [TaskTree]) -> TaskSnapshot? {
         func search(_ nodes: [TaskTree]) -> TaskSnapshot? {
             for (index, node) in nodes.enumerated() {

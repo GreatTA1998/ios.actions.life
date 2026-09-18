@@ -7,6 +7,7 @@ struct CalendarEventCard: View {
     var onToggle: () -> Void
     var onOpen: () -> Void
     var onDrop: (HomeChrome.DropTarget) -> Void
+    @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 0 : 4) {
@@ -60,6 +61,16 @@ struct CalendarEventCard: View {
                 .stroke(Theme.cardStroke, lineWidth: 1)
         }
         .opacity(task.isDone ? 0.55 : 1)
-        .taskDragLift(id: task.id, name: task.name, duration: task.duration, onDrop: onDrop)
+        .overlay {
+            if chrome.showsNestPreview(for: task.id) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(
+                        Theme.dragPreview.opacity(0.6),
+                        style: StrokeStyle(lineWidth: 1, dash: [5, 4])
+                    )
+            }
+        }
+        .background { DropZoneReporter(kind: .nest(task.id)) }
+        .taskDragLift(id: task.id, name: task.name, duration: task.duration, fromCalendar: true, onDrop: onDrop)
     }
 }

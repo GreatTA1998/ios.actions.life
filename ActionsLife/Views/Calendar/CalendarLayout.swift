@@ -84,4 +84,15 @@ enum CalendarLayout {
         let minutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
         return CGFloat(minutes) / 60 * hourHeight(pixelsPerHour: pixelsPerHour)
     }
+
+    static func dayWindow(
+        around now: Date = .now,
+        past: Int,
+        future: Int,
+        calendar: Calendar = .current
+    ) -> [Date] {
+        let start = calendar.startOfDay(for: now)
+        let origin = calendar.date(byAdding: .day, value: -past, to: start) ?? start
+        return (0..<(past + future + 1)).compactMap { calendar.date(byAdding: .day, value: $0, to: origin) }
+    }
 }
