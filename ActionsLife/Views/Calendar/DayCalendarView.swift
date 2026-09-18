@@ -17,132 +17,31 @@ struct DayCalendarView: View {
     @State private var scrollOffset: CGPoint = .zero
     @State private var pastCount = 14
     @State private var futureCount = 21
-    @State private var headerHeight: CGFloat = 56
     @State private var nowScrollGeneration = 0
 
     private var pixelsPerHour: Double { store.profile?.pixelsPerHour ?? 50 }
     private var hourHeight: CGFloat { CalendarLayout.hourHeight(pixelsPerHour: pixelsPerHour) }
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            calendarScroll
-            stickyTimeAxis
-            stickyHeaders
-            topChrome
-        }
-        .background(Theme.calendarBackground)
-    }
-
-    private var calendarScroll: some View {
-        ScrollView([.horizontal, .vertical], showsIndicators: false) {
-            HStack(alignment: .top, spacing: 0) {
-                Color.clear.frame(width: CalendarLayout.timeAxisWidth)
-                ForEach(days, id: \.self) { day in
-                    DayColumnView(
-                        store: store,
-                        day: day,
-                        tasks: store.tasks(on: DateISO.dayString(from: day)),
-                        pixelsPerHour: pixelsPerHour,
-                        columnWidth: columnWidth,
-                        selectedTaskID: $selectedTaskID,
-                        calendarComposer: $calendarComposer,
-                        composerText: $composerText,
-                        onCommitComposer: onCommitComposer,
-                        onCancelComposer: onCancelComposer,
-                        showsHeader: false,
-                        showsTimedCanvas: true
-                    )
-                    .id(DateISO.dayString(from: day))
-                }
-            }
-        }
-        .scrollDisabled(chrome.pointerCaptured)
-        .modifier(ScrollOffsetTracker(offset: $scrollOffset))
-        .background {
-            ScrollToOffsetBridge(offset: nowOffset, generation: nowScrollGeneration)
-        }
-        .onAppear {
-            if nowScrollGeneration == 0 {
-                nowScrollGeneration = 1
-            }
-        }
-        .onChange(of: scrollOffset) { _, _ in
-            expandDayWindowIfNeeded()
-        }
-    }
-
-    /// Web sticky `DayHeader`: stays at the top of the pane so all-day tap-create
-    /// remains reachable after jump-to-now (headers no longer live in the 24h scroll).
-    private var stickyHeaders: some View {
-        HStack(alignment: .top, spacing: 0) {
-            Color.clear.frame(width: CalendarLayout.timeAxisWidth)
-            ForEach(days, id: \.self) { day in
-                DayColumnView(
-                    store: store,
-                    day: day,
-                    tasks: store.tasks(on: DateISO.dayString(from: day)),
-                    pixelsPerHour: pixelsPerHour,
-                    columnWidth: columnWidth,
-                    selectedTaskID: $selectedTaskID,
-                    calendarComposer: $calendarComposer,
-                    composerText: $composerText,
-                    onCommitComposer: onCommitComposer,
-                    onCancelComposer: onCancelComposer,
-                    showsHeader: true,
-                    showsTimedCanvas: false
-                )
-            }
-        }
-        .offset(x: -scrollOffset.x)
-        .fixedSize(horizontal: true, vertical: true)
-        .background(Theme.calendarBackground)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Theme.grid)
-                .frame(height: 1)
-        }
-        .background {
-            GeometryReader { geo in
-                Color.clear.preference(key: CalendarHeaderHeightKey.self, value: geo.size.height)
-            }
-        }
-        .onPreferenceChange(CalendarHeaderHeightKey.self) { headerHeight = max($0, 44) }
-        .fixedSize(horizontal: true, vertical: true)
-        .frame(maxWidth: .infinity, maxHeight: headerHeight, alignment: .topLeading)
-        .clipped()
-        .contentShape(Rectangle())
-    }
-
-    private var stickyTimeAxis: some View {
         VStack(spacing: 0) {
-            Color.clear.frame(height: headerHeight)
-            VStack(spacing: 0) {
-                ForEach(CalendarLayout.hours(), id: \.self) { hour in
-                    Text(CalendarLayout.hourLabel(hour))
-                        .font(.caption2)
-                        .foregroundStyle(Theme.secondaryInk)
-                        .frame(width: CalendarLayout.timeAxisWidth - 6, height: hourHeight, alignment: .topTrailing)
-                }
-            }
-            .offset(y: -scrollOffset.y)
+            chromeRow
+            dayHeaderStrip
+            timedPane
         }
-        .frame(width: CalendarLayout.timeAxisWidth, alignment: .top)
-        .clipped()
-        .allowsHitTesting(false)
-        .background(Theme.calendarBackground.opacity(0.92))
+        .background(Theme.calendarBackground)
     }
 
-    private var topChrome: some View {
+    private var chromeRow: some View {
         HStack {
             Button("Today") {
                 onJumpToday()
                 nowScrollGeneration += 1
             }
-                .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(0.86), in: Capsule())
-                .overlay(Capsule().stroke(Theme.cardStroke, lineWidth: 1))
+            .font(.subheadline.weight(.semibold))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color.white.opacity(0.86), in: Capsule())
+            .overlay(Capsule().stroke(Theme.cardStroke, lineWidth: 1))
             Spacer()
             Button(action: onMenu) {
                 Image(systemName: "ellipsis")
@@ -155,7 +54,127 @@ struct DayCalendarView: View {
             .accessibilityLabel("More")
         }
         .padding(.horizontal, 12)
-        .padding(.top, 8)
+        .padding(.vertical, 6)
+        .background(Theme.calendarBackground)
+    }
+
+    /// Real layout row (not a ZStack overlay). Overlay headers never appeared on Simulator.
+    private var dayHeaderStrip: some View {
+        HStack(alignment: .top, spacing: 0) {
+            Color.clear.frame(width: CalendarLayout.timeAxisWidth)
+            HStack(alignment: .top, spacing: 0) {
+                ForEach(days, id: \.self) { day in
+                    DayColumnView(
+                        store: store,
+                        day: day,
+                        tasks: store.tasks(on: DateISO.dayString(from: day)),
+                        pixelsPerHour: pixelsPerHour,
+                        columnWidth: columnWidth,
+                        selectedTaskID: $selectedTaskID,
+                        calendarComposer: $calendarComposer,
+                        composerText: $composerText,
+                        onCommitComposer: onCommitComposer,
+                        onCancelComposer: onCancelComposer,
+                        showsHeader: true,
+                        showsTimedCanvas: false
+                    )
+                }
+            }
+            .offset(x: -scrollOffset.x)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipped()
+        .contentShape(Rectangle())
+        .background(Theme.calendarBackground)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Theme.grid)
+                .frame(height: 1)
+        }
+    }
+
+    private var timedPane: some View {
+        ZStack(alignment: .topLeading) {
+            timedScroll
+            stickyTimeAxis
+        }
+    }
+
+    private var timedScroll: some View {
+        ScrollViewReader { proxy in
+            ScrollView([.horizontal, .vertical], showsIndicators: false) {
+                HStack(alignment: .top, spacing: 0) {
+                    Color.clear.frame(width: CalendarLayout.timeAxisWidth)
+                    ForEach(days, id: \.self) { day in
+                        DayColumnView(
+                            store: store,
+                            day: day,
+                            tasks: store.tasks(on: DateISO.dayString(from: day)),
+                            pixelsPerHour: pixelsPerHour,
+                            columnWidth: columnWidth,
+                            selectedTaskID: $selectedTaskID,
+                            calendarComposer: $calendarComposer,
+                            composerText: $composerText,
+                            onCommitComposer: onCommitComposer,
+                            onCancelComposer: onCancelComposer,
+                            showsHeader: false,
+                            showsTimedCanvas: true
+                        )
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    VStack(spacing: 0) {
+                        Color.clear.frame(height: CalendarLayout.nowScrollY(pixelsPerHour: pixelsPerHour))
+                        HStack(spacing: 0) {
+                            Color.clear.frame(
+                                width: CalendarLayout.timeAxisWidth + CGFloat(todayIndex) * columnWidth
+                            )
+                            Color.clear
+                                .frame(width: 1, height: 1)
+                                .id("jump-now")
+                            Spacer(minLength: 0)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .allowsHitTesting(false)
+                }
+                .background {
+                    ScrollToOffsetBridge(offset: nowOffset, generation: nowScrollGeneration)
+                }
+            }
+            .scrollDisabled(chrome.pointerCaptured)
+            .modifier(ScrollOffsetTracker(offset: $scrollOffset))
+            .onAppear { jumpToNow(proxy) }
+            .onChange(of: nowScrollGeneration) { _, _ in
+                jumpToNow(proxy)
+            }
+            .onChange(of: scrollOffset) { _, _ in
+                expandDayWindowIfNeeded()
+            }
+            .task {
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                jumpToNow(proxy)
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                jumpToNow(proxy)
+            }
+        }
+    }
+
+    private var stickyTimeAxis: some View {
+        VStack(spacing: 0) {
+            ForEach(CalendarLayout.hours(), id: \.self) { hour in
+                Text(CalendarLayout.hourLabel(hour))
+                    .font(.caption2)
+                    .foregroundStyle(Theme.secondaryInk)
+                    .frame(width: CalendarLayout.timeAxisWidth - 6, height: hourHeight, alignment: .topTrailing)
+            }
+        }
+        .offset(y: -scrollOffset.y)
+        .frame(width: CalendarLayout.timeAxisWidth, alignment: .top)
+        .clipped()
+        .allowsHitTesting(false)
+        .background(Theme.calendarBackground.opacity(0.92))
     }
 
     private var days: [Date] {
@@ -174,6 +193,13 @@ struct DayCalendarView: View {
         )
     }
 
+    private func jumpToNow(_ proxy: ScrollViewProxy) {
+        proxy.scrollTo("jump-now", anchor: .top)
+        if nowScrollGeneration == 0 {
+            nowScrollGeneration = 1
+        }
+    }
+
     private func expandDayWindowIfNeeded() {
         let column = columnWidth
         guard column > 0 else { return }
@@ -184,13 +210,6 @@ struct DayCalendarView: View {
         if dayIndex >= days.count - 4, futureCount < 180 {
             futureCount += 14
         }
-    }
-}
-
-private struct CalendarHeaderHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 56
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
     }
 }
 

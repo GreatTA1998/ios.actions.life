@@ -97,6 +97,9 @@ struct CalendarEventCard: View {
 
     private var durationHandle: some View {
         Color.primary.opacity(0.001)
+            .frame(maxWidth: .infinity)
+            .frame(height: HomeChrome.durationHandleHit)
+            .contentShape(Rectangle())
             .overlay(alignment: .bottom) {
                 VStack(spacing: 4) {
                     if chrome.durationResize?.taskID == task.id {
@@ -111,12 +114,10 @@ struct CalendarEventCard: View {
                 }
                 .allowsHitTesting(false)
             }
-            .overlay {
+            .background {
                 DurationResizeBridge(
                     enabled: chrome.drag == nil && !chrome.isResizing
                         && (chrome.durationResize == nil || chrome.durationResize?.taskID == task.id),
-                    holdDelay: HomeChrome.holdDelay,
-                    slop: HomeChrome.touchSlop,
                     onBegan: {
                         chrome.beginDurationResize(taskID: task.id, duration: task.duration)
                     },
@@ -129,9 +130,6 @@ struct CalendarEventCard: View {
                     onCancel: { chrome.cancelDurationResize() }
                 )
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: HomeChrome.durationHandleHit)
-            .contentShape(Rectangle())
             .accessibilityLabel("Resize duration")
     }
 }
