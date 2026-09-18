@@ -93,6 +93,29 @@ enum CalendarLayout {
         timedCapsuleAccessibilityPrefix + taskID
     }
 
+    /// `task.id` stamped on the painted card / capsule UIView.
+    static func taskID(fromPaintedView view: UIView?) -> String? {
+        var current = view
+        while let node = current {
+            if node is UIScrollView { break }
+            if let id = node.accessibilityIdentifier, !id.isEmpty {
+                if id.hasPrefix(timedCapsuleAccessibilityPrefix) {
+                    let taskID = String(id.dropFirst(timedCapsuleAccessibilityPrefix.count))
+                    if !taskID.isEmpty { return taskID }
+                }
+                if id.hasPrefix(timedCardAccessibilityPrefix) {
+                    let taskID = String(id.dropFirst(timedCardAccessibilityPrefix.count))
+                    if !taskID.isEmpty { return taskID }
+                }
+            }
+            if let value = node.accessibilityValue, !value.isEmpty {
+                return value
+            }
+            current = node.superview
+        }
+        return nil
+    }
+
     /// Hour-grid SpatialTap must ignore only this rect — Y-only matched any event at
     /// that hour, and full-canvas card wrappers swallowed empty-hour taps (`d94cb61`).
     /// Bottom/side slop matches the visible capsule hit slop.

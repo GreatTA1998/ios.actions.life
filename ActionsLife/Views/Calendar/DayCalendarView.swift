@@ -223,7 +223,6 @@ struct DayCalendarView: View {
                             homeChrome.beginDurationResize(taskID: hit.taskID, duration: hit.duration)
                         },
                         onChanged: { taskID, minutes in
-                            // Same store write Details shows as “30 minutes”.
                             treeStore.setDuration(taskID, minutes: minutes)
                         },
                         onEnded: { taskID, minutes in

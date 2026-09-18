@@ -726,6 +726,17 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertNil(hit(CGPoint(x: 100, y: 4 * hourH + 10)))
     }
 
+    func testTaskIDIsReadFromCapsuleUIView() {
+        let card = UIView(frame: CGRect(x: 50, y: 292, width: 168, height: 39.3))
+        card.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3-event")
+        let capsule = UIView(frame: CGRect(x: 0, y: 23.3, width: 168, height: 16))
+        capsule.accessibilityIdentifier = CalendarLayout.timedCapsuleAccessibilityID("pr3-event")
+        capsule.accessibilityValue = "pr3-event"
+        card.addSubview(capsule)
+        XCTAssertEqual(CalendarLayout.taskID(fromPaintedView: capsule), "pr3-event")
+        XCTAssertEqual(CalendarLayout.taskID(fromPaintedView: card), "pr3-event")
+    }
+
     func testPaintedCapsuleBandIsBottom16ptOfA11yCardFrame() {
         // `94e965c` a11y `calendar.timed.*` frame (50, 280.3, 168, 39.3).
         // Press-drag y≈303.6–319.6 is the capsule; title stays Details.

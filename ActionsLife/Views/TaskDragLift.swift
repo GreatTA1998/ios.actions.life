@@ -563,6 +563,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
 
     func updateUIView(_ uiView: InstallerView, context: Context) {
         context.coordinator.parent = self
+        context.coordinator.bindStoreWrites(from: self)
         if !context.coordinator.dragging {
             context.coordinator.pan.isEnabled = enabled
             context.coordinator.tap.isEnabled = enabled
@@ -579,15 +580,21 @@ struct HourDurationPanBridge: UIViewRepresentable {
         private var lockedOffsets: [(UIScrollView, CGPoint)] = []
         private var savedCancelContentTouches: [(UIScrollView, Bool)] = []
         private var pendingHit: CalendarLayout.DurationCapsuleTarget?
-        /// Survives recognizer `reset()` so a mid-pan state change cannot
-        /// drop the capsule that `shouldReceive` claimed.
         private var claimedTarget: CalendarLayout.DurationCapsuleTarget?
+        /// Copied at install so `touchesMoved` does not go through a stale
+        /// `parent` or a pan that never `.changed` (`074335c` byte-identical).
+        var writeDuration: ((_ taskID: String, _ minutes: Double) -> Void)?
+        var commitDuration: ((_ taskID: String, _ minutes: Double) -> Void)?
+        fileprivate var capturedTaskID: String?
+        private var capturedStartDuration: Double = 30
+        private var beganWindowY: CGFloat?
 
         init(parent: HourDurationPanBridge) {
             self.parent = parent
             super.init()
             pan.owner = self
             pan.delegate = self
+            bindStoreWrites(from: parent)
             // False so a tap on empty hour / title still reaches the recognizers
             // (`605f886` cancelled SpatialTap and create went all-day).
             pan.cancelsTouchesInView = false
@@ -663,46 +670,89 @@ struct HourDurationPanBridge: UIViewRepresentable {
             return CalendarLayout.DurationCapsuleTarget(taskID: taskID, duration: 30, rect: .zero)
         }
 
-        /// minutes = start + deltaY / hourHeight * 60. Writes the painted
-        /// card’s id — the same `setDuration` Details binds as “30 minutes”.
-        func minutesForLocationDelta(_ deltaY: CGFloat, hit: CalendarLayout.DurationCapsuleTarget) -> Double {
-            CalendarLayout.durationFromLocationDelta(
-                start: hit.duration,
-                locationDeltaY: deltaY,
+        func bindStoreWrites(from parent: HourDurationPanBridge) {
+            writeDuration = parent.onChanged
+            commitDuration = parent.onEnded
+        }
+
+        /// minutes = start + (location.y − began.y) / hourHeight * 60.
+        func minutesFromBegan(locationY: CGFloat) -> Double {
+            let began = beganWindowY ?? locationY
+            return CalendarLayout.durationFromLocationDelta(
+                start: capturedStartDuration,
+                locationDeltaY: locationY - began,
                 pixelsPerHour: parent.pixelsPerHour
             )
         }
 
-        func applyLocationDelta(_ deltaY: CGFloat) {
-            let hit = pendingHit ?? claimedTarget
-            guard let hit else { return }
-            pendingHit = hit
-            restoreLockedOffsets()
-            if !dragging {
-                dragging = true
-                parent.onBegan(hit)
+        func captureCapsule(from scroll: UIScrollView?, touch: UITouch) {
+            beganWindowY = touch.location(in: touch.window ?? scroll).y
+            if let scroll {
+                let location = touch.location(in: scroll)
+                let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: location)
+                if let taskID = CalendarLayout.taskID(fromPaintedView: view) {
+                    capturedTaskID = taskID
+                    capturedStartDuration = capsuleTarget(taskID: taskID).duration
+                }
             }
-            parent.onChanged(hit.taskID, minutesForLocationDelta(deltaY, hit: hit))
+            if capturedTaskID == nil, let hit = pendingHit ?? claimedTarget {
+                capturedTaskID = hit.taskID
+                capturedStartDuration = hit.duration
+            }
+        }
+
+        /// Direct store write from `touchesMoved` / `touchesEnded`.
+        func writeStoreDuration(locationY: CGFloat, ended: Bool) {
+            guard let taskID = capturedTaskID, !taskID.isEmpty else { return }
+            guard writeDuration != nil || commitDuration != nil else { return }
+            dragging = true
+            restoreLockedOffsets()
+            let live = minutesFromBegan(locationY: locationY)
+            if ended {
+                let snapped = CalendarLayout.snapDuration(live, snap: parent.snap)
+                let commit = commitDuration ?? writeDuration
+                invokeStoreWrite(commit, taskID: taskID, minutes: snapped)
+            } else {
+                invokeStoreWrite(writeDuration, taskID: taskID, minutes: live)
+            }
+        }
+
+        private func invokeStoreWrite(
+            _ write: ((_ taskID: String, _ minutes: Double) -> Void)?,
+            taskID: String,
+            minutes: Double
+        ) {
+            guard let write else { return }
+            let id = taskID
+            let mins = minutes
+            let run = { write(id, mins) }
+            if Thread.isMainThread {
+                run()
+            } else {
+                DispatchQueue.main.sync(run)
+            }
+        }
+
+        func applyLocationDelta(_ deltaY: CGFloat) {
+            let y = (beganWindowY ?? 0) + deltaY
+            writeStoreDuration(locationY: y, ended: false)
         }
 
         func durationPanEnded(deltaY: CGFloat) {
-            let hit = pendingHit ?? claimedTarget
-            applyLocationDelta(deltaY)
-            guard let hit else {
-                dropClaim()
-                claimedTarget = nil
-                pendingHit = nil
-                return
+            if capturedTaskID != nil {
+                let y = (beganWindowY ?? 0) + deltaY
+                writeStoreDuration(locationY: y, ended: true)
             }
-            let minutes = CalendarLayout.snapDuration(
-                minutesForLocationDelta(deltaY, hit: hit),
-                snap: parent.snap
-            )
+            clearCapsuleCapture()
+            dropClaim()
+        }
+
+        func clearCapsuleCapture() {
             dragging = false
             pendingHit = nil
             claimedTarget = nil
-            dropClaim()
-            parent.onEnded(hit.taskID, minutes)
+            capturedTaskID = nil
+            beganWindowY = nil
         }
 
         func durationPanCancelled() {
@@ -710,6 +760,8 @@ struct HourDurationPanBridge: UIViewRepresentable {
             dragging = false
             pendingHit = nil
             claimedTarget = nil
+            capturedTaskID = nil
+            beganWindowY = nil
             dropClaim()
             if wasDragging {
                 parent.onCancel()
@@ -728,6 +780,8 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 if case .capsule(let target) = hit {
                     pendingHit = target
                     claimedTarget = target
+                    capturedTaskID = target.taskID
+                    capturedStartDuration = target.duration
                     return true
                 }
                 pendingHit = nil
@@ -797,31 +851,18 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
     }
 
-    /// Capsule pan on the hour scroller. Accumulates window `location.y`
-    /// (not `location(in: nil)`, which stays 0). Stays `.possible` until
-    /// lift so a `.began` `reset()` cannot cancel `previewDuration`.
+    /// Writes `setDuration` from `touchesMoved` / `touchesEnded` using
+    /// `location.y − began.y` and the capsule UIView’s `task.id`.
     final class DurationPanRecognizer: UIGestureRecognizer {
         weak var owner: Coordinator?
-        private(set) var trackedTranslationY: CGFloat = 0
-        private var recognized = false
 
         override func reset() {
             super.reset()
-            // Do not dropClaim / cancel while the finger is down — that
-            // wiped the session at `71817a5` so the card stayed 39pt.
-            if owner?.dragging == true { return }
-            trackedTranslationY = 0
-            recognized = false
         }
 
         private func windowY(of touch: UITouch) -> CGFloat {
             let space: UIView? = touch.window ?? view?.window ?? view
             return touch.location(in: space).y
-        }
-
-        private func previousWindowY(of touch: UITouch) -> CGFloat {
-            let space: UIView? = touch.window ?? view?.window ?? view
-            return touch.previousLocation(in: space).y
         }
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
@@ -831,34 +872,25 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 owner?.unlockOffsets()
                 return
             }
-            trackedTranslationY = 0
-            recognized = false
             owner?.lockOffsets(from: view)
+            owner?.captureCapsule(from: view as? UIScrollView, touch: touch)
             owner?.restoreLockedOffsets()
         }
 
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
             super.touchesMoved(touches, with: event)
             guard let touch = touches.first else { return }
-            trackedTranslationY += windowY(of: touch) - previousWindowY(of: touch)
             owner?.restoreLockedOffsets()
-            if abs(trackedTranslationY) >= 8 {
-                recognized = true
-                owner?.applyLocationDelta(trackedTranslationY)
-            }
+            owner?.writeStoreDuration(locationY: windowY(of: touch), ended: false)
             owner?.restoreLockedOffsets()
         }
 
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
             if let touch = touches.first {
-                trackedTranslationY += windowY(of: touch) - previousWindowY(of: touch)
+                owner?.writeStoreDuration(locationY: windowY(of: touch), ended: true)
             }
-            if recognized || abs(trackedTranslationY) >= 8 {
-                recognized = true
-                owner?.durationPanEnded(deltaY: trackedTranslationY)
-            } else {
-                owner?.durationPanCancelled()
-            }
+            owner?.clearCapsuleCapture()
+            owner?.dropClaim()
             state = .failed
             super.touchesEnded(touches, with: event)
             owner?.unlockOffsets()
@@ -872,11 +904,11 @@ struct HourDurationPanBridge: UIViewRepresentable {
         }
 
         override func canPrevent(_ other: UIGestureRecognizer) -> Bool {
-            recognized || owner?.dragging == true
+            owner?.dragging == true || owner?.capturedTaskID != nil
         }
 
         override func canBePrevented(by other: UIGestureRecognizer) -> Bool {
-            !(recognized || owner?.dragging == true)
+            owner?.dragging != true && owner?.capturedTaskID == nil
         }
 
         override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {
@@ -938,6 +970,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
             tap.require(toFail: pan)
             scroll.panGestureRecognizer.require(toFail: pan)
             scroll.delaysContentTouches = false
+            coordinator.bindStoreWrites(from: coordinator.parent)
             isUserInteractionEnabled = false
         }
 

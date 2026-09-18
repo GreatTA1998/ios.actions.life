@@ -138,6 +138,8 @@ struct DurationEdgeHandle: View {
                 .allowsHitTesting(false)
             }
             .contentShape(Rectangle())
+            .accessibilityIdentifier(CalendarLayout.timedCapsuleAccessibilityID(task.id))
+            .accessibilityValue(task.id)
             .accessibilityLabel("Resize duration")
     }
 }
