@@ -17,16 +17,9 @@ final class HomeChrome {
     static let splitMinPane: CGFloat = 48
     /// Bottom edge reserved so a lift does not start on the duration handle.
     static let durationHandleHit: CGFloat = 28
-    /// Painted gray capsule height (visual).
+    /// Painted gray capsule / duration-pan target. Keep this off the title so
+    /// a card-body tap still opens Details (`b45eccd` bottom-half ate the tap).
     static let durationCapsuleHit: CGFloat = 16
-
-    /// Hittable duration-resize band: at least the bottom half of the card so
-    /// an XCUITest finger on the capsule hits it, while the title / top half
-    /// still opens Details (`a0da6ed` covered the 36pt card with 28pt).
-    static func durationResizeHandleHeight(cardHeight: CGFloat) -> CGFloat {
-        let height = max(cardHeight, 36)
-        return max(height / 2, durationCapsuleHit)
-    }
 
     var isResizing = false
     var isLifting = false

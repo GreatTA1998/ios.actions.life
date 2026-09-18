@@ -212,7 +212,8 @@ final class DragDropTests: XCTestCase {
     }
 
     func testDurationPanHitsVisibleCapsuleNotCardBody() {
-        // Bottom-half handle on a 36pt card; title (top half) still opens Details.
+        // 16pt capsule at the bottom of a 36pt card. Title / card body still
+        // opens Details (`b45eccd` bottom-half handle ate the title tap).
         let event = CalendarLayout.placeTimed(
             [TaskSnapshot(
                 id: "timed",
@@ -231,23 +232,22 @@ final class DragDropTests: XCTestCase {
             )],
             pixelsPerHour: 50
         )[0]
-        let cardHeight = max(event.height, 36)
-        let handleHeight = HomeChrome.durationResizeHandleHeight(cardHeight: cardHeight)
-        XCTAssertEqual(handleHeight, 18, accuracy: 0.01)
-        XCTAssertGreaterThanOrEqual(handleHeight, cardHeight / 2)
-        let handle = CGRect(
-            x: 6,
-            y: event.y + cardHeight - handleHeight,
-            width: 200,
-            height: handleHeight
+        let capsule = CalendarLayout.durationCapsuleRect(
+            columnIndex: 14,
+            columnWidth: 220,
+            event: event
         )
+        XCTAssertEqual(capsule.height, 16, accuracy: 0.01)
+        XCTAssertEqual(capsule.minY, event.y + 36 - 16, accuracy: 0.01)
         XCTAssertFalse(
-            CalendarLayout.touchHitsCapsule(CGPoint(x: handle.midX, y: event.y + 8), capsule: handle),
-            "title / top half must still open Details"
+            CalendarLayout.touchHitsCapsule(CGPoint(x: capsule.midX, y: event.y + 8), capsule: capsule),
+            "title / card body must still open Details"
         )
         XCTAssertTrue(
-            CalendarLayout.touchHitsCapsule(CGPoint(x: handle.midX, y: handle.midY), capsule: handle)
+            CalendarLayout.touchHitsCapsule(CGPoint(x: capsule.midX, y: capsule.midY), capsule: capsule)
         )
+        XCTAssertEqual(HomeChrome.durationCapsuleHit, 16)
+        XCTAssertLessThan(HomeChrome.durationCapsuleHit, 36 / 2 + 1)
     }
 
     func testLiftIgnoresDurationHandleBand() {

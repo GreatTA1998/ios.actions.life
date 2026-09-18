@@ -107,8 +107,8 @@ struct DayColumnView: View {
             hourGrid
             ForEach(placed) { event in
                 // Spacer above the card only — never a canvas-height fill (that
-                // put capsules on empty hours). Duration drag is a high-priority
-                // SwiftUI gesture on the bottom half of this card.
+                // put capsules on empty hours). Duration pan is a UIKit handle
+                // on the 16pt capsule so the hour scroller is not exclusive.
                 VStack(alignment: .leading, spacing: 0) {
                     Color.clear
                         .frame(height: max(0, event.y))
@@ -120,8 +120,7 @@ struct DayColumnView: View {
                         onOpen: { selectedTaskID = event.task.id },
                         onToggleChild: { store.toggleDone($0) },
                         onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) },
-                        onResizeDuration: { store.setDuration(event.task.id, minutes: $0) },
-                        cardHeight: max(event.height, 36)
+                        onResizeDuration: { store.setDuration(event.task.id, minutes: $0) }
                     )
                     .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
                     .padding(.leading, 6)
