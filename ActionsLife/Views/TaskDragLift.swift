@@ -741,6 +741,14 @@ struct HourDurationPanBridge: UIViewRepresentable {
             writeStoreDuration(locationY: windowY, ended: ended)
         }
 
+        /// Id already claimed by the 16pt handle — write path only.
+        func followTaskID() -> String? {
+            if let id = capturedTaskID, !id.isEmpty { return id }
+            if let id = pendingHit?.taskID, !id.isEmpty { return id }
+            if let id = claimedTarget?.taskID, !id.isEmpty { return id }
+            return nil
+        }
+
         func beginFollowing(_ touch: UITouch) {
             trackedTouch = touch
             guard followLink == nil else { return }
@@ -770,7 +778,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
         /// Keep writing window Y if `touchesMoved` is skipped after the
         /// finger leaves the 16pt handle. Same `UITouch`, window space.
         @objc func sampleTrackedTouch() {
-            guard let touch = trackedTouch, capturedTaskID != nil else { return }
+            guard let touch = trackedTouch, followTaskID() != nil else { return }
             let y = touch.location(in: touch.window).y
             switch touch.phase {
             case .began, .moved, .stationary:
@@ -785,20 +793,24 @@ struct HourDurationPanBridge: UIViewRepresentable {
             }
         }
 
-        /// Direct store write from `touchesMoved` / `touchesEnded`.
+        /// Live `setDuration` from handle `touchesMoved` / display-link only.
+        /// Does not change claim / `shouldReceive` / install.
         func writeStoreDuration(locationY: CGFloat, ended: Bool) {
             refreshStoreWrites()
-            guard let taskID = capturedTaskID, !taskID.isEmpty else { return }
-            let liveWrite = writeDuration ?? parent.onChanged
-            let liveCommit = commitDuration ?? parent.onEnded
+            guard let taskID = followTaskID(), !taskID.isEmpty else { return }
+            if capturedTaskID == nil { capturedTaskID = taskID }
             dragging = true
             restoreLockedOffsets()
             let live = minutesFromBegan(locationY: locationY)
+            // Always the live store closures — do not depend on a nil copy.
             if ended {
-                let snapped = CalendarLayout.snapDuration(live, snap: parent.snap)
-                invokeStoreWrite(liveCommit, taskID: taskID, minutes: snapped)
+                invokeStoreWrite(
+                    parent.onEnded,
+                    taskID: taskID,
+                    minutes: CalendarLayout.snapDuration(live, snap: parent.snap)
+                )
             } else {
-                invokeStoreWrite(liveWrite, taskID: taskID, minutes: live)
+                invokeStoreWrite(parent.onChanged, taskID: taskID, minutes: live)
             }
         }
 
