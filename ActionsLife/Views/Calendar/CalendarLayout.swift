@@ -183,7 +183,7 @@ enum CalendarLayout {
             boundsOrigin: boundsOrigin,
             adjustedContentInset: adjustedContentInset
         )
-        if hourContentWidth <= hourBoundsWidth + 1 {
+        if hourContentWidth <= hourBoundsWidth + 1, locationInScroll.x <= hourBoundsWidth + 1 {
             point.x += horizontalContentOffset
         }
         return point
@@ -218,15 +218,67 @@ enum CalendarLayout {
         case emptyHour(dayISO: String, minutes: Int)
     }
 
+    /// Painted timed card in hour-canvas space (column X + event Y).
+    struct PaintedTimedCard: Equatable {
+        var taskID: String
+        var duration: Double
+        var frame: CGRect
+    }
+
+    static func paintedCardHit(
+        _ point: CGPoint,
+        cards: [PaintedTimedCard]
+    ) -> HourCanvasHit? {
+        for card in cards {
+            guard card.frame.width > 1, card.frame.height > 1 else { continue }
+            let capsule = CGRect(
+                x: card.frame.minX,
+                y: card.frame.maxY - HomeChrome.durationCapsuleHit,
+                width: card.frame.width,
+                height: HomeChrome.durationCapsuleHit
+            )
+            if touchHitsCapsule(point, capsule: capsule) {
+                return .capsule(
+                    DurationCapsuleTarget(taskID: card.taskID, duration: card.duration, rect: capsule)
+                )
+            }
+            let body = CGRect(
+                x: card.frame.minX,
+                y: card.frame.minY,
+                width: card.frame.width,
+                height: max(0, card.frame.height - HomeChrome.durationCapsuleHit)
+            )
+            if body.insetBy(dx: -6, dy: -2).contains(point) {
+                return .blockBody(taskID: card.taskID)
+            }
+        }
+        return nil
+    }
+
     static func hourCanvasHit(
         contentPoint: CGPoint,
         columns: [HourCanvasColumn],
         columnWidth: CGFloat,
         pixelsPerHour: Double,
-        snap: Int
+        snap: Int,
+        paintedCards: [PaintedTimedCard] = []
     ) -> HourCanvasHit? {
+        if let painted = paintedCardHit(contentPoint, cards: paintedCards) {
+            return painted
+        }
         guard columnWidth > 1, !columns.isEmpty else { return nil }
-        let index = Int(floor(contentPoint.x / columnWidth))
+        let index = Int(floor(max(contentPoint.x, 0) / columnWidth))
+        if columns.indices.contains(index) {
+            let local = CGPoint(
+                x: contentPoint.x - CGFloat(index) * columnWidth,
+                y: contentPoint.y
+            )
+            // Painted frames may be column-local if the named space is the day
+            // column instead of the full hour HStack.
+            if let painted = paintedCardHit(local, cards: paintedCards) {
+                return painted
+            }
+        }
         guard columns.indices.contains(index) else { return nil }
         let column = columns[index]
         let local = CGPoint(
@@ -251,6 +303,28 @@ enum CalendarLayout {
         }
         for event in column.events {
             if blockContains(location: local, event: event, columnWidth: columnWidth) {
+                return .blockBody(taskID: event.task.id)
+            }
+        }
+        // Y-only in this column: `b40245f` treated a title tap on the hour-6
+        // block as empty hour (composer) because 2D local-X missed the paint.
+        for event in column.events {
+            let frame = blockFrame(event: event, columnWidth: columnWidth)
+            let capsule = durationCapsuleRect(columnIndex: 0, columnWidth: columnWidth, event: event)
+            if local.y >= capsule.minY - 4, local.y <= capsule.maxY + 4 {
+                return .capsule(
+                    DurationCapsuleTarget(
+                        taskID: event.task.id,
+                        duration: event.task.duration,
+                        rect: durationCapsuleRect(
+                            columnIndex: index,
+                            columnWidth: columnWidth,
+                            event: event
+                        )
+                    )
+                )
+            }
+            if local.y >= frame.minY, local.y < capsule.minY {
                 return .blockBody(taskID: event.task.id)
             }
         }

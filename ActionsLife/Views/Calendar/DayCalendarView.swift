@@ -20,6 +20,7 @@ struct DayCalendarView: View {
     @State private var futureCount = 21
     @State private var nowScrollGeneration = 0
     @State private var headerHeight: CGFloat = 52
+    @State private var paintedCards: [CalendarLayout.PaintedTimedCard] = []
 
     private var pixelsPerHour: Double { store.profile?.pixelsPerHour ?? 50 }
     private var hourHeight: CGFloat { CalendarLayout.hourHeight(pixelsPerHour: pixelsPerHour) }
@@ -38,6 +39,7 @@ struct DayCalendarView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.calendarBackground)
         .onPreferenceChange(CalendarHeaderHeightKey.self) { headerHeight = max($0, 44) }
+        .onPreferenceChange(PaintedTimedCardKey.self) { paintedCards = $0 }
     }
 
     private var chromeRow: some View {
@@ -164,6 +166,7 @@ struct DayCalendarView: View {
                             )
                         }
                     }
+                    .coordinateSpace(name: "hourCanvas")
 
                     // Leading edge of the hour canvas — never at todayIndex×columnWidth.
                     VStack(spacing: 0) {
@@ -195,6 +198,7 @@ struct DayCalendarView: View {
                     HourDurationPanBridge(
                         enabled: chrome.drag == nil && !chrome.isResizing,
                         columns: hourCanvasColumns,
+                        paintedCards: paintedCards,
                         columnWidth: columnWidth,
                         pixelsPerHour: pixelsPerHour,
                         snap: chrome.snapInterval,
@@ -295,6 +299,13 @@ struct DayCalendarView: View {
         if dayIndex >= days.count - 4, futureCount < 180 {
             futureCount += 14
         }
+    }
+}
+
+struct PaintedTimedCardKey: PreferenceKey {
+    static var defaultValue: [CalendarLayout.PaintedTimedCard] = []
+    static func reduce(value: inout [CalendarLayout.PaintedTimedCard], nextValue: () -> [CalendarLayout.PaintedTimedCard]) {
+        value.append(contentsOf: nextValue())
     }
 }
 

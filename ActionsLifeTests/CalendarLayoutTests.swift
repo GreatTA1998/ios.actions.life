@@ -229,6 +229,18 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(point.y, 270, accuracy: 0.01)
     }
 
+    func testHourContentPointDoesNotDoubleCountWhenLocationIsAlreadyInContentX() {
+        let point = CalendarLayout.hourContentPoint(
+            locationInScroll: CGPoint(x: 14 * 220 + 40, y: 70),
+            contentOffset: CGPoint(x: 0, y: 200),
+            boundsOrigin: .zero,
+            hourContentWidth: 390,
+            hourBoundsWidth: 390,
+            horizontalContentOffset: 14 * 220
+        )
+        XCTAssertEqual(point.x, 14 * 220 + 40, accuracy: 0.01)
+    }
+
     func testHourCanvasHitEmptyHourIsTimedNotAllDay() {
         // `605f886` parked PR3 timed in the all-day header (no 16pt capsule).
         let placed = CalendarLayout.placeTimed(
@@ -273,6 +285,77 @@ final class CalendarLayoutTests: XCTestCase {
         }
         XCTAssertEqual(target.taskID, "timed")
         XCTAssertEqual(target.duration, 30, accuracy: 0.01)
+    }
+
+    func testPaintedCardHitDispatchesDetailsAndDurationWhenColumnsAreStale() {
+        // `b40245f` scroller tap still treated the hour-6 title as empty hour
+        // (composer) because coordinator columns lagged the painted card.
+        let columns = [
+            CalendarLayout.HourCanvasColumn(dayISO: "2026-09-19", events: [])
+        ]
+        let frame = CGRect(x: 6, y: 6 * 50, width: 208, height: 36)
+        let cards = [
+            CalendarLayout.PaintedTimedCard(taskID: "pr3", duration: 30, frame: frame)
+        ]
+        let title = CalendarLayout.hourCanvasHit(
+            contentPoint: CGPoint(x: 40, y: frame.minY + 8),
+            columns: columns,
+            columnWidth: 220,
+            pixelsPerHour: 50,
+            snap: 15,
+            paintedCards: cards
+        )
+        XCTAssertEqual(title, .blockBody(taskID: "pr3"))
+        let handle = CalendarLayout.hourCanvasHit(
+            contentPoint: CGPoint(x: 40, y: frame.maxY - 4),
+            columns: columns,
+            columnWidth: 220,
+            pixelsPerHour: 50,
+            snap: 15,
+            paintedCards: cards
+        )
+        guard case .capsule(let target) = handle else {
+            return XCTFail("painted 16pt capsule must write setDuration")
+        }
+        XCTAssertEqual(target.taskID, "pr3")
+        XCTAssertGreaterThan(target.rect.height, 1)
+        let empty = CalendarLayout.hourCanvasHit(
+            contentPoint: CGPoint(x: 40, y: 4 * 50 + 10),
+            columns: columns,
+            columnWidth: 220,
+            pixelsPerHour: 50,
+            snap: 15,
+            paintedCards: cards
+        )
+        XCTAssertEqual(empty, .emptyHour(dayISO: "2026-09-19", minutes: 4 * 60))
+    }
+
+    func testHourCanvasHitTitleByYWhenLocalXMissesPaint() {
+        let placed = CalendarLayout.placeTimed(
+            [event(time: "06:00", duration: 30)],
+            pixelsPerHour: 50
+        )
+        let columns = [
+            CalendarLayout.HourCanvasColumn(dayISO: "2026-09-19", events: placed)
+        ]
+        let title = CalendarLayout.hourCanvasHit(
+            contentPoint: CGPoint(x: -1, y: placed[0].y + 8),
+            columns: columns,
+            columnWidth: 220,
+            pixelsPerHour: 50,
+            snap: 15
+        )
+        XCTAssertEqual(title, .blockBody(taskID: "timed"))
+        let handle = CalendarLayout.hourCanvasHit(
+            contentPoint: CGPoint(x: -1, y: placed[0].y + 36 - 4),
+            columns: columns,
+            columnWidth: 220,
+            pixelsPerHour: 50,
+            snap: 15
+        )
+        guard case .capsule = handle else {
+            return XCTFail("capsule pan must match painted bottom band by Y")
+        }
     }
 
     func testBlockFrameOriginMatchesPaintedCard() {

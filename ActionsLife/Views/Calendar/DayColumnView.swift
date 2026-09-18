@@ -124,6 +124,20 @@ struct DayColumnView: View {
                     )
                     .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
                     .padding(.leading, 6)
+                    .background {
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: PaintedTimedCardKey.self,
+                                value: [
+                                    CalendarLayout.PaintedTimedCard(
+                                        taskID: event.task.id,
+                                        duration: event.task.duration,
+                                        frame: geo.frame(in: .named("hourCanvas"))
+                                    )
+                                ]
+                            )
+                        }
+                    }
                 }
                 .frame(width: columnWidth, alignment: .topLeading)
             }
@@ -171,9 +185,6 @@ struct DayColumnView: View {
                 if let hit = placed.first(where: {
                     CalendarLayout.blockContains(location: event.location, event: $0, columnWidth: columnWidth)
                 }) {
-                    // SpatialTap still receives the title tap (`1fc1511`). Open
-                    // Details instead of no-op/composer — same product as
-                    // `e2fba41` card-body tap. Ignore the 16pt capsule.
                     let capsule = CalendarLayout.durationCapsuleRect(
                         columnIndex: 0,
                         columnWidth: columnWidth,
@@ -184,6 +195,25 @@ struct DayColumnView: View {
                     }
                     selectedTaskID = hit.task.id
                     return
+                }
+                // Same scroller dispatch as UIKit: Y on a painted block is Details,
+                // not a second timed composer (`b40245f` title tap).
+                if let hit = CalendarLayout.hourCanvasHit(
+                    contentPoint: event.location,
+                    columns: [CalendarLayout.HourCanvasColumn(dayISO: dayISO, events: placed)],
+                    columnWidth: columnWidth,
+                    pixelsPerHour: pixelsPerHour,
+                    snap: chrome.snapInterval
+                ) {
+                    switch hit {
+                    case .blockBody(let taskID):
+                        selectedTaskID = taskID
+                        return
+                    case .capsule:
+                        return
+                    case .emptyHour:
+                        break
+                    }
                 }
                 let minutes = CalendarLayout.minutes(
                     atY: event.location.y,

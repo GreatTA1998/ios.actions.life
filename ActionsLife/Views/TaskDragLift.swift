@@ -542,6 +542,7 @@ struct HourScrollTouchBridge: UIViewRepresentable {
 struct HourDurationPanBridge: UIViewRepresentable {
     var enabled: Bool
     var columns: [CalendarLayout.HourCanvasColumn]
+    var paintedCards: [CalendarLayout.PaintedTimedCard]
     var columnWidth: CGFloat
     var pixelsPerHour: Double
     var snap: Int
@@ -613,7 +614,8 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 columns: parent.columns,
                 columnWidth: parent.columnWidth,
                 pixelsPerHour: parent.pixelsPerHour,
-                snap: parent.snap
+                snap: parent.snap,
+                paintedCards: parent.paintedCards
             ) {
             case .emptyHour(let dayISO, let minutes):
                 parent.onTimedCreate(dayISO, minutes)
@@ -671,7 +673,8 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 columns: parent.columns,
                 columnWidth: parent.columnWidth,
                 pixelsPerHour: parent.pixelsPerHour,
-                snap: parent.snap
+                snap: parent.snap,
+                paintedCards: parent.paintedCards
             )
             if gestureRecognizer === pan {
                 if case .capsule(let target) = hit {
