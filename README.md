@@ -1,4 +1,4 @@
-# actions.life iOS
+# ios.actions.life
 
 Native SwiftUI app for [actions.life](https://github.com/GreatTA1998/actions.life). It lives in this repository, not in the web app’s `ios/` folder.
 
