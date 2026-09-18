@@ -605,13 +605,13 @@ struct DurationResizeBridge: UIViewRepresentable {
     final class DurationPanRecognizer: UIPanGestureRecognizer {
         weak var owner: Coordinator?
 
-        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
             super.touchesBegan(touches, with: event)
             owner?.lockOffsets(from: view)
             owner?.restoreLockedOffsets()
         }
 
-        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
             owner?.restoreLockedOffsets()
             super.touchesMoved(touches, with: event)
             owner?.restoreLockedOffsets()
@@ -625,7 +625,7 @@ struct DurationResizeBridge: UIViewRepresentable {
             }
         }
 
-        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
             // Fast drag that never left `.possible` until lift still has to
             // `.began` so `handlePan` writes translation and commits duration.
             if state == .possible, abs(translation(in: nil).y) >= 8 {
@@ -637,7 +637,7 @@ struct DurationResizeBridge: UIViewRepresentable {
             }
         }
 
-        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
             super.touchesCancelled(touches, with: event)
             owner?.unlockOffsets()
         }
