@@ -1023,6 +1023,56 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(lastMinutes, minutes, accuracy: 0.01)
     }
 
+    func testPinnedScrollerTranslationZeroUsesWindowTouchDelta() {
+        // `953443c`: claim pins `contentOffset`, so pan translation / offset
+        // delta is ~0. Finger window Y 325 → 405 must still write
+        // `30 + 80 / hourHeight * 60` for the painted card id.
+        let pinnedTranslation: CGFloat = 0
+        XCTAssertEqual(pinnedTranslation, 0)
+        let beganWindowY: CGFloat = 325
+        let fingerWindowY: CGFloat = 405
+        let pixels = 50.0
+        let minutes = CalendarLayout.paintedHandleMinutes(
+            start: 30,
+            windowDeltaY: fingerWindowY - beganWindowY,
+            pixelsPerHour: pixels
+        )
+        XCTAssertEqual(minutes, 30 + 80 / 50 * 60, accuracy: 0.01)
+        XCTAssertGreaterThan(minutes, 30)
+
+        var storeWrites: [(String, Double)] = []
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { [] },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: pixels,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { _, _ in
+                XCTFail("live store write must not fall back to onChanged")
+            },
+            onEnded: { _, _ in },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        coordinator.bindStoreWrites(from: bridge)
+        coordinator.installLiveSetDuration { id, value in
+            storeWrites.append((id, value))
+        }
+        coordinator.bindClaimedHandleForTest(
+            taskID: "pr3",
+            startDuration: 30,
+            beganWindowY: beganWindowY
+        )
+        coordinator.followClaimedHourScroller(windowY: fingerWindowY, ended: false)
+        XCTAssertEqual(storeWrites.count, 1)
+        XCTAssertEqual(storeWrites[0].0, "pr3")
+        XCTAssertEqual(storeWrites[0].1, minutes, accuracy: 0.01)
+    }
+
     func testTitleStaticTextIsDetailsNotDurationHandle() {
         // `b8f1337`: StaticText `calendar.timed.*` `(87.3, 312.7, 122.7, 18)`
         // must stay Details. Duration is only the 16pt handle below the title.

@@ -851,10 +851,17 @@ struct HourDurationPanBridge: UIViewRepresentable {
             observingHourPan = false
         }
 
+        /// Finger Y in window space — not pinned-scroller `translation`
+        /// (`953443c` `setDuration(30 + 0)`).
+        func windowLocationY(of gesture: UIGestureRecognizer) -> CGFloat {
+            let space: UIView? = gesture.view?.window ?? gesture.view
+            return gesture.location(in: space).y
+        }
+
         func claimedHourPanWindowY() -> CGFloat? {
-            guard let began = beganWindowY, let scroll = hourScroll else { return nil }
+            guard let scroll = hourScroll else { return nil }
             let pan = scroll.panGestureRecognizer
-            return began + pan.translation(in: pan.view?.window ?? pan.view).y
+            return windowLocationY(of: pan)
         }
 
         func hasPinnedClaim() -> Bool {
@@ -873,13 +880,8 @@ struct HourDurationPanBridge: UIViewRepresentable {
         /// drag, then `dropClaim()` on lift. Do not only pin `contentOffset`.
         @objc func hourScrollerPanFollowed(_ gesture: UIGestureRecognizer) {
             guard followTaskID() != nil else { return }
-            let y: CGFloat
-            if let pan = gesture as? UIPanGestureRecognizer, let began = beganWindowY {
-                y = began + pan.translation(in: pan.view?.window ?? pan.view).y
-            } else {
-                let space: UIView? = gesture.view?.window ?? gesture.view
-                y = gesture.location(in: space).y
-            }
+            // Window `UITouch` Y vs touch-down Y. Pinned `translation` is ~0.
+            let y = windowLocationY(of: gesture)
             restoreLockedOffsets()
             switch gesture.state {
             case .began, .changed:
