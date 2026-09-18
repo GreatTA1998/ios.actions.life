@@ -67,8 +67,77 @@ final class CalendarLayoutTests: XCTestCase {
             pixelsPerHour: 50
         )
         XCTAssertEqual(placed.count, 1)
-        XCTAssertTrue(CalendarLayout.blockContains(y: placed[0].y + 20, event: placed[0]))
-        XCTAssertFalse(CalendarLayout.blockContains(y: placed[0].y - 8, event: placed[0]))
+        let column: CGFloat = 220
+        XCTAssertTrue(
+            CalendarLayout.blockContains(
+                location: CGPoint(x: 40, y: placed[0].y + 20),
+                event: placed[0],
+                columnWidth: column
+            )
+        )
+        XCTAssertFalse(
+            CalendarLayout.blockContains(
+                location: CGPoint(x: 40, y: placed[0].y - 8),
+                event: placed[0],
+                columnWidth: column
+            )
+        )
+    }
+
+    func testEmptyHourTapIsNotSwallowedByAfternoonBlock() {
+        // Seed-like: 12:30 for 106 min must not eat an hour-2 SpatialTap (`d94cb61`).
+        let placed = CalendarLayout.placeTimed(
+            [event(time: "12:30", duration: 106)],
+            pixelsPerHour: 50
+        )
+        let column: CGFloat = 220
+        let hour2 = CGPoint(x: 40, y: 2 * 50 + 10)
+        XCTAssertFalse(
+            CalendarLayout.blockContains(location: hour2, event: placed[0], columnWidth: column)
+        )
+        XCTAssertTrue(
+            CalendarLayout.blockContains(
+                location: CGPoint(x: 40, y: placed[0].y + 10),
+                event: placed[0],
+                columnWidth: column
+            )
+        )
+        // Y-only would have treated the trailing gutter as “on the block”.
+        XCTAssertFalse(
+            CalendarLayout.blockContains(
+                location: CGPoint(x: column + 24, y: placed[0].y + 10),
+                event: placed[0],
+                columnWidth: column
+            )
+        )
+    }
+
+    func testMorningBlockDoesNotClaimEmptyHourTwo() {
+        let placed = CalendarLayout.placeTimed(
+            [event(time: "00:00", duration: 106)],
+            pixelsPerHour: 50
+        )
+        let column: CGFloat = 220
+        XCTAssertFalse(
+            CalendarLayout.blockContains(
+                location: CGPoint(x: 40, y: 2 * 50),
+                event: placed[0],
+                columnWidth: column
+            )
+        )
+        let handleY = CalendarLayout.durationHandleTop(
+            duration: 106,
+            y: placed[0].y,
+            pixelsPerHour: 50,
+            handle: 28
+        )
+        XCTAssertTrue(
+            CalendarLayout.blockContains(
+                location: CGPoint(x: 40, y: handleY + 14),
+                event: placed[0],
+                columnWidth: column
+            )
+        )
     }
 
     func testPreviewDurationMatchesWebPixelsPerHour() {

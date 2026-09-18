@@ -463,9 +463,8 @@ struct HoldThenDragBridge: UIViewRepresentable {
 
 /// Immediate pan on the visible duration capsule (no long-press).
 ///
-/// Must live in **layout** at the capsule, not inside a `.position()` card.
-/// UIView hit-testing ignores `.position()`, so a pan on the hour scroller with
-/// `convert(bounds, to: nil)` never saw the finger at hour 22 (`y=384`).
+/// Lives in a layout overlay at the capsule (spacer + 28pt), not inside a
+/// `.position()` / full-canvas card wrapper. Empty hours hit the hour grid.
 struct DurationResizeBridge: UIViewRepresentable {
     var enabled: Bool
     var onBegan: () -> Void

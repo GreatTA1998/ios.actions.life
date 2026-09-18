@@ -58,7 +58,7 @@ enum CalendarLayout {
         return max(36, min(max(minimumEventHeight, durationHeight), canvasHeight(pixelsPerHour: pixelsPerHour) - y))
     }
 
-    /// Top of the 28pt duration edge, in canvas coordinates (layout, not `.position()`).
+    /// Top of the 28pt duration edge, in canvas coordinates.
     static func durationHandleTop(
         duration: Double,
         y: CGFloat,
@@ -68,9 +68,28 @@ enum CalendarLayout {
         y + blockFrameHeight(duration: duration, y: y, pixelsPerHour: pixelsPerHour) - handle
     }
 
-    static func blockContains(y: CGFloat, event: PlacedEvent) -> Bool {
-        let height = max(event.height, 36)
-        return y >= event.y && y <= event.y + height
+    /// Timed card in canvas space (6pt leading inset, matching DayColumnView).
+    static func blockFrame(event: PlacedEvent, columnWidth: CGFloat, leading: CGFloat = 6) -> CGRect {
+        CGRect(
+            x: leading,
+            y: event.y,
+            width: max(0, columnWidth - leading * 2),
+            height: max(event.height, 36)
+        )
+    }
+
+    /// Hour-grid SpatialTap must ignore only this rect — Y-only matched any event at
+    /// that hour, and full-canvas card wrappers swallowed empty-hour taps (`d94cb61`).
+    /// Bottom/side slop matches `DurationResizeBridge.HandleView.point(inside:)`.
+    static func blockContains(location: CGPoint, event: PlacedEvent, columnWidth: CGFloat) -> Bool {
+        let frame = blockFrame(event: event, columnWidth: columnWidth)
+        let hittable = CGRect(
+            x: frame.minX - 6,
+            y: frame.minY,
+            width: frame.width + 12,
+            height: frame.height + 10
+        )
+        return hittable.contains(location)
     }
 
     static func scrollTargetHour(now: Date = .now, calendar: Calendar = .current) -> Int {
