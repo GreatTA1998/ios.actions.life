@@ -4,11 +4,11 @@ import SwiftUI
 struct HomeView: View {
     let uid: String
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(AuthSession.self) private var auth
+    @Environment(AppNavigation.self) private var navigation
 
     @State private var store: TaskTreeStore?
-    @State private var selectedDay = Calendar.current.startOfDay(for: .now)
-    @State private var selectedTaskID: String?
     @State private var composerText = ""
     @State private var showComposer = false
     @State private var showMenu = false
@@ -16,6 +16,7 @@ struct HomeView: View {
     @State private var chrome = HomeChrome()
 
     var body: some View {
+        @Bindable var navigation = navigation
         NavigationStack {
             Group {
                 if let store {
@@ -29,11 +30,11 @@ struct HomeView: View {
                         VStack(spacing: 0) {
                             DayCalendarView(
                                 store: store,
-                                selectedDay: $selectedDay,
-                                selectedTaskID: $selectedTaskID,
+                                selectedDay: $navigation.selectedDay,
+                                selectedTaskID: $navigation.selectedTaskID,
                                 columnWidth: columnWidth,
                                 onJumpToday: {
-                                    selectedDay = Calendar.current.startOfDay(for: .now)
+                                    navigation.selectedDay = Calendar.current.startOfDay(for: .now)
                                 },
                                 onMenu: { showMenu = true }
                             )
@@ -63,7 +64,7 @@ struct HomeView: View {
 
                             InboxView(
                                 store: store,
-                                selectedTaskID: $selectedTaskID,
+                                selectedTaskID: $navigation.selectedTaskID,
                                 onAddRoot: { showComposer = true; composerParentID = "" },
                                 onAddChild: { parent in
                                     composerParentID = parent
@@ -92,7 +93,7 @@ struct HomeView: View {
                             showComposer = true
                         }
                         Button("Jump to today") {
-                            selectedDay = Calendar.current.startOfDay(for: .now)
+                            navigation.selectedDay = Calendar.current.startOfDay(for: .now)
                         }
                         Button("Sign out", role: .destructive) {
                             auth.signOut()
@@ -101,7 +102,7 @@ struct HomeView: View {
                     }
                     .onChange(of: store.lastScheduledISO) { _, iso in
                         guard let iso, let date = DateISO.date(fromDayISO: iso) else { return }
-                        selectedDay = Calendar.current.startOfDay(for: date)
+                        navigation.selectedDay = Calendar.current.startOfDay(for: date)
                     }
                 } else {
                     Theme.listBackground.ignoresSafeArea()
@@ -132,6 +133,17 @@ struct HomeView: View {
                 let next = TaskTreeStore(context: modelContext, uid: uid)
                 next.seedGuestDataIfNeeded()
                 store = next
+                IntentStore.live = next
+                EventIndex.scheduleSync(snapshots: next.allSnapshots)
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                store?.reload()
+                if let store {
+                    IntentStore.live = store
+                    EventIndex.scheduleSync(snapshots: store.allSnapshots)
+                }
             }
         }
     }
@@ -163,10 +175,10 @@ struct HomeView: View {
     private func selectedTaskBinding(_ store: TaskTreeStore) -> Binding<TaskIdentity?> {
         Binding(
             get: {
-                guard let id = selectedTaskID else { return nil }
+                guard let id = navigation.selectedTaskID else { return nil }
                 return TaskIdentity(id: id)
             },
-            set: { selectedTaskID = $0?.id }
+            set: { navigation.selectedTaskID = $0?.id }
         )
     }
 }
