@@ -489,7 +489,66 @@ enum CalendarLayout {
             }
             current = node.superview
         }
+        // XCUI Other bottom 16pt: `hitTest` is the hour grid (`18d59de`),
+        // but the painted `calendar.timed.*` card frame still has a handle
+        // below the title StaticText. Do not cover the title (`height < 24`).
+        if let taskID = paintedOtherHandleHit(locationInScroll: locationInScroll, in: scroll) {
+            return .capsule(taskID: taskID)
+        }
         return nil
+    }
+
+    /// Painted card **Other** frame bottom 16pt → handle, even when
+    /// `hitTest` landed on the hour grid. Title StaticText (`calendar.timed.*`
+    /// height < 24) is Details, not a session.
+    static func paintedOtherHandleHit(
+        locationInScroll: CGPoint,
+        in scroll: UIScrollView
+    ) -> String? {
+        var found: String?
+        func walk(_ view: UIView) {
+            if found != nil { return }
+            if view === scroll {
+                view.subviews.forEach(walk)
+                return
+            }
+            if view.bounds.width < 2 || view.bounds.height < 2 {
+                view.subviews.forEach(walk)
+                return
+            }
+            let rect = view.convert(view.bounds, to: scroll)
+            if !rect.insetBy(dx: -2, dy: -2).contains(locationInScroll) {
+                view.subviews.forEach(walk)
+                return
+            }
+            if let id = view.accessibilityIdentifier, !id.isEmpty {
+                if id.hasPrefix(timedCapsuleAccessibilityPrefix) {
+                    let taskID = String(id.dropFirst(timedCapsuleAccessibilityPrefix.count))
+                    if !taskID.isEmpty {
+                        found = taskID
+                        return
+                    }
+                }
+                if id.hasPrefix(timedCardAccessibilityPrefix) {
+                    // Title StaticText ~18pt — Details, not duration.
+                    if view.bounds.height < 24 {
+                        view.subviews.forEach(walk)
+                        return
+                    }
+                    let local = scroll.convert(locationInScroll, to: view)
+                    if local.y >= view.bounds.height - 16 - 0.5 {
+                        let taskID = String(id.dropFirst(timedCardAccessibilityPrefix.count))
+                        if !taskID.isEmpty {
+                            found = taskID
+                            return
+                        }
+                    }
+                }
+            }
+            view.subviews.forEach(walk)
+        }
+        walk(scroll)
+        return found
     }
 
     /// Full-column / viewport views that swallowed empty-hour create.
@@ -527,41 +586,10 @@ enum CalendarLayout {
         in scroll: UIScrollView,
         window: UIView
     ) -> String? {
-        var found: String?
-        func walk(_ view: UIView) {
-            if found != nil { return }
-            if view.bounds.width < 2 || view.bounds.height < 2 {
-                view.subviews.forEach(walk)
-                return
-            }
-            let rect = view.convert(view.bounds, to: window)
-            if !rect.insetBy(dx: -2, dy: -2).contains(windowPoint) {
-                view.subviews.forEach(walk)
-                return
-            }
-            if let id = view.accessibilityIdentifier, !id.isEmpty {
-                if id.hasPrefix(timedCapsuleAccessibilityPrefix) {
-                    let taskID = String(id.dropFirst(timedCapsuleAccessibilityPrefix.count))
-                    if !taskID.isEmpty {
-                        found = taskID
-                        return
-                    }
-                }
-                if id.hasPrefix(timedCardAccessibilityPrefix), view.bounds.height >= 24 {
-                    let local = window.convert(windowPoint, to: view)
-                    if local.y >= view.bounds.height - 16 - 0.5 {
-                        let taskID = String(id.dropFirst(timedCardAccessibilityPrefix.count))
-                        if !taskID.isEmpty {
-                            found = taskID
-                            return
-                        }
-                    }
-                }
-            }
-            view.subviews.forEach(walk)
-        }
-        walk(scroll)
-        return found
+        paintedOtherHandleHit(
+            locationInScroll: window.convert(windowPoint, to: scroll),
+            in: scroll
+        )
     }
 
     static func paintedCapsuleBand(of card: UIView, in scroll: UIScrollView) -> CGRect {

@@ -1274,6 +1274,68 @@ final class CalendarLayoutTests: XCTestCase {
         )
     }
 
+    func testPaintedCardOtherBottom16ptIsHandleWhenHitTestIsHourGrid() {
+        // `18d59de`: XCUI Other bottom 16pt `hitTest`s the hour grid, so
+        // `shouldReceive` saw empty-hour and never started a session. Map
+        // that Other band into the handle (below the title StaticText only).
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        scroll.contentSize = CGSize(width: 390, height: 1200)
+        let grid = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 1200))
+        scroll.addSubview(grid)
+        let card = UIView(frame: CGRect(x: 50, y: 280.3, width: 168, height: 39.3))
+        card.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        grid.addSubview(card)
+        let title = UIView(frame: CGRect(x: 37.3, y: 4, width: 122.7, height: 18))
+        title.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        card.addSubview(title)
+        scroll.layoutIfNeeded()
+
+        XCTAssertTrue(CalendarLayout.isHourCanvasHost(grid, scroll: scroll))
+
+        let otherBottom = CGPoint(x: 134, y: 280.3 + 39.3 - 8)
+        XCTAssertEqual(
+            CalendarLayout.paintedOtherHandleHit(locationInScroll: otherBottom, in: scroll),
+            "pr3"
+        )
+        XCTAssertEqual(
+            CalendarLayout.paintedCardHit(
+                from: grid,
+                locationInScroll: otherBottom,
+                in: scroll
+            ),
+            .capsule(taskID: "pr3"),
+            "hour-grid hitTest + Other bottom 16pt is the handle"
+        )
+
+        let titlePoint = CGPoint(x: 87.3 + 61, y: 280.3 + 4 + 9)
+        XCTAssertNil(
+            CalendarLayout.paintedOtherHandleHit(locationInScroll: titlePoint, in: scroll),
+            "title StaticText must not start a duration session"
+        )
+        XCTAssertEqual(
+            CalendarLayout.paintedCardHit(
+                from: title,
+                locationInScroll: titlePoint,
+                in: scroll
+            ),
+            .blockBody(taskID: "pr3"),
+            "title StaticText tap stays Details"
+        )
+
+        let emptyHour = CGPoint(x: 134, y: 8 * 50 + 8)
+        XCTAssertNil(
+            CalendarLayout.paintedOtherHandleHit(locationInScroll: emptyHour, in: scroll)
+        )
+        XCTAssertNil(
+            CalendarLayout.paintedCardHit(
+                from: grid,
+                locationInScroll: emptyHour,
+                in: scroll
+            ),
+            "empty hour stays timed create"
+        )
+    }
+
     func testWindowHandleHitStartsDurationSessionNotTitle() {
         // `dd62490`: claim pinned hours with no task.id so setDuration no-op'd.
         // Other bottom 16pt `calendar.capsule.*` starts the session.
