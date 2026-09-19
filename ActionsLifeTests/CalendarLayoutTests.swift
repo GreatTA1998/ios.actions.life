@@ -1168,6 +1168,78 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(storeWrites[0].1, minutes, accuracy: 0.01)
     }
 
+    func testHourPanChangedWritesSetDurationForPaintedTaskID() {
+        // `47d78b2`: lockOffsets display-link follow did not run. The hour
+        // UIPanGestureRecognizer `.changed` that pins contentOffset must
+        // write `recognizer.location(in: recognizer.view?.window)` vs
+        // touch-down Y for the painted `calendar.timed.*` id, before
+        // `dropClaim()`. If `.changed` has no session, the 16pt claim
+        // must start one.
+        var storeWrites: [(String, Double)] = []
+        let pixels = 50.0
+        let beganWindowY: CGFloat = 297
+        let fingerWindowY: CGFloat = 297 + 80
+        let minutes = CalendarLayout.paintedHandleMinutes(
+            start: 30,
+            windowDeltaY: 80,
+            pixelsPerHour: pixels
+        )
+        XCTAssertEqual(minutes, 30 + 80 / 50 * 60, accuracy: 0.01)
+        XCTAssertGreaterThan(minutes, 30)
+
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { [] },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: pixels,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { _, _ in
+                XCTFail("live store write must not fall back to onChanged")
+            },
+            onEnded: { _, _ in },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        coordinator.bindStoreWrites(from: bridge)
+        coordinator.installLiveSetDuration { id, value in
+            storeWrites.append((id, value))
+        }
+        coordinator.claimSixteenPointHandleForTest(
+            taskID: "pr3",
+            startDuration: 30,
+            beganWindowY: beganWindowY
+        )
+        XCTAssertFalse(coordinator.hasDurationSession(), "claim is not yet a session")
+        coordinator.ensureHandleSessionFromClaim()
+        XCTAssertTrue(coordinator.hasDurationSession(), "16pt claim must start a session")
+        XCTAssertEqual(coordinator.followTaskID(), "pr3")
+
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        scroll.contentSize = CGSize(width: 390, height: 1200)
+        scroll.contentOffset = CGPoint(x: 0, y: 297)
+        coordinator.lockOffsets(from: scroll)
+        XCTAssertTrue(coordinator.hasPinnedClaim())
+
+        coordinator.followHourPanChanged(windowY: beganWindowY)
+        XCTAssertTrue(storeWrites.isEmpty, "touch-down must not write 30")
+
+        coordinator.followHourPanChanged(windowY: fingerWindowY)
+        XCTAssertEqual(storeWrites.count, 1)
+        XCTAssertEqual(storeWrites[0].0, "pr3")
+        XCTAssertEqual(storeWrites[0].1, minutes, accuracy: 0.01)
+        XCTAssertGreaterThan(storeWrites[0].1, 30)
+        XCTAssertTrue(coordinator.hasPinnedClaim(), "pin holds through hour-pan .changed")
+
+        coordinator.dropClaim()
+        XCTAssertFalse(coordinator.hasPinnedClaim(), "dropClaim() unpins only")
+        XCTAssertEqual(storeWrites.count, 1, "dropClaim() must not write 30")
+        XCTAssertEqual(storeWrites[0].1, minutes, accuracy: 0.01)
+    }
+
     func testTitleStaticTextIsDetailsNotDurationHandle() {
         // `b8f1337`: StaticText `calendar.timed.*` `(87.3, 312.7, 122.7, 18)`
         // must stay Details. Duration is only the 16pt handle below the title.
