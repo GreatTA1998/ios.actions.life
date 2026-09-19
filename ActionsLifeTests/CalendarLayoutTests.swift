@@ -1274,66 +1274,105 @@ final class CalendarLayoutTests: XCTestCase {
         )
     }
 
-    func testPaintedCardOtherBottom16ptIsHandleWhenHitTestIsHourGrid() {
-        // `18d59de`: XCUI Other bottom 16pt `hitTest`s the hour grid, so
-        // `shouldReceive` saw empty-hour and never started a session. Map
-        // that Other band into the handle (below the title StaticText only).
+    func testPaintedBlockFrameHandleIgnoresLaggedOtherUIView() {
+        // `aff9919`: Other / a11y frames lag painted pixels (`.position()` /
+        // `.offset()`). Duration starts from `blockFrame` bottom 16pt, not
+        // the Other UIView. Title StaticText stays Details.
+        let hourH: CGFloat = 50
+        let placed = CalendarLayout.placeTimed(
+            [event(id: "pr3", time: "12:00", duration: 30)],
+            pixelsPerHour: 50
+        )[0]
+        let frame = CalendarLayout.blockFrame(event: placed, columnWidth: 220)
+        XCTAssertEqual(frame.minY, 12 * hourH, accuracy: 0.01)
+        XCTAssertGreaterThanOrEqual(frame.height, 36)
+        let handleY = frame.maxY - 8
+        let columns = [
+            CalendarLayout.HourCanvasColumn(dayISO: "2026-09-19", events: [placed])
+        ]
+        guard let handle = CalendarLayout.paintedBlockFrameHandle(
+            contentPoint: CGPoint(x: frame.midX, y: handleY),
+            columns: columns,
+            columnWidth: 220
+        ) else {
+            return XCTFail("painted blockFrame bottom 16pt must be the handle")
+        }
+        XCTAssertEqual(handle.taskID, "pr3")
+        XCTAssertEqual(handle.duration, 30, accuracy: 0.01)
+        XCTAssertNil(
+            CalendarLayout.paintedBlockFrameHandle(
+                contentPoint: CGPoint(x: frame.midX, y: frame.minY + 8),
+                columns: columns,
+                columnWidth: 220
+            ),
+            "title / card body is not the handle"
+        )
+        XCTAssertNil(
+            CalendarLayout.paintedBlockFrameHandle(
+                contentPoint: CGPoint(x: frame.midX, y: 8 * hourH + 8),
+                columns: columns,
+                columnWidth: 220
+            ),
+            "empty hour stays timed create"
+        )
+
         let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
-        scroll.contentSize = CGSize(width: 390, height: 1200)
-        let grid = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 1200))
+        scroll.contentSize = CGSize(width: 390, height: 24 * hourH)
+        let grid = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 24 * hourH))
         scroll.addSubview(grid)
-        let card = UIView(frame: CGRect(x: 50, y: 280.3, width: 168, height: 39.3))
-        card.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
-        grid.addSubview(card)
+        let lagged = UIView(
+            frame: frame.offsetBy(dx: 0, dy: -11)
+        )
+        lagged.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        grid.addSubview(lagged)
         let title = UIView(frame: CGRect(x: 37.3, y: 4, width: 122.7, height: 18))
         title.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
-        card.addSubview(title)
+        lagged.addSubview(title)
         scroll.layoutIfNeeded()
 
-        XCTAssertTrue(CalendarLayout.isHourCanvasHost(grid, scroll: scroll))
-
-        let otherBottom = CGPoint(x: 134, y: 280.3 + 39.3 - 8)
-        XCTAssertEqual(
-            CalendarLayout.paintedOtherHandleHit(locationInScroll: otherBottom, in: scroll),
-            "pr3"
-        )
-        XCTAssertEqual(
-            CalendarLayout.paintedCardHit(
-                from: grid,
-                locationInScroll: otherBottom,
-                in: scroll
-            ),
-            .capsule(taskID: "pr3"),
-            "hour-grid hitTest + Other bottom 16pt is the handle"
-        )
-
-        let titlePoint = CGPoint(x: 87.3 + 61, y: 280.3 + 4 + 9)
+        let handleInScroll = CGPoint(x: frame.midX, y: handleY)
         XCTAssertNil(
-            CalendarLayout.paintedOtherHandleHit(locationInScroll: titlePoint, in: scroll),
-            "title StaticText must not start a duration session"
+            CalendarLayout.paintedOtherHandleHit(locationInScroll: handleInScroll, in: scroll),
+            "lagged Other must not be the handle source"
         )
+
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { columns },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: 50,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { _, _ in },
+            onEnded: { _, _ in },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        guard case .capsule(let target) = coordinator.canvasHit(
+            in: scroll,
+            locationInScroll: handleInScroll
+        ) else {
+            return XCTFail("canvasHit must start a session from painted blockFrame")
+        }
+        XCTAssertEqual(target.taskID, "pr3")
+
         XCTAssertEqual(
-            CalendarLayout.paintedCardHit(
-                from: title,
-                locationInScroll: titlePoint,
-                in: scroll
+            coordinator.canvasHit(
+                in: scroll,
+                locationInScroll: title.convert(CGPoint(x: 61, y: 9), to: scroll)
             ),
             .blockBody(taskID: "pr3"),
             "title StaticText tap stays Details"
         )
-
-        let emptyHour = CGPoint(x: 134, y: 8 * 50 + 8)
-        XCTAssertNil(
-            CalendarLayout.paintedOtherHandleHit(locationInScroll: emptyHour, in: scroll)
-        )
-        XCTAssertNil(
-            CalendarLayout.paintedCardHit(
-                from: grid,
-                locationInScroll: emptyHour,
-                in: scroll
-            ),
-            "empty hour stays timed create"
-        )
+        guard case .emptyHour = coordinator.canvasHit(
+            in: scroll,
+            locationInScroll: CGPoint(x: frame.midX, y: 8 * hourH + 8)
+        ) else {
+            return XCTFail("empty hour stays timed create")
+        }
     }
 
     func testWindowHandleHitStartsDurationSessionNotTitle() {

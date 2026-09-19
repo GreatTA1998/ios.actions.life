@@ -489,11 +489,61 @@ enum CalendarLayout {
             }
             current = node.superview
         }
-        // XCUI Other bottom 16pt: `hitTest` is the hour grid (`18d59de`),
-        // but the painted `calendar.timed.*` card frame still has a handle
-        // below the title StaticText. Do not cover the title (`height < 24`).
-        if let taskID = paintedOtherHandleHit(locationInScroll: locationInScroll, in: scroll) {
-            return .capsule(taskID: taskID)
+        return nil
+    }
+
+    /// Title StaticText `calendar.timed.*` (`height < 24`) — Details, not
+    /// the duration handle (`b8f1337`).
+    static func titleStaticTextTaskID(from view: UIView?) -> String? {
+        var current = view
+        while let node = current {
+            if node is UIScrollView { break }
+            if let id = node.accessibilityIdentifier,
+               id.hasPrefix(timedCardAccessibilityPrefix),
+               node.bounds.height < 24
+            {
+                let taskID = String(id.dropFirst(timedCardAccessibilityPrefix.count))
+                if !taskID.isEmpty { return taskID }
+            }
+            current = node.superview
+        }
+        return nil
+    }
+
+    /// Bottom 16pt of the painted `blockFrame` (hour-canvas layout), not
+    /// the lagged Other UIView / a11y frame (`aff9919`).
+    static func paintedBlockFrameHandle(
+        contentPoint: CGPoint,
+        columns: [HourCanvasColumn],
+        columnWidth: CGFloat
+    ) -> DurationCapsuleTarget? {
+        guard columnWidth > 1, !columns.isEmpty else { return nil }
+        let index = Int(floor(max(contentPoint.x, 0) / columnWidth))
+        guard columns.indices.contains(index) else { return nil }
+        let column = columns[index]
+        let local = CGPoint(
+            x: contentPoint.x - CGFloat(index) * columnWidth,
+            y: contentPoint.y
+        )
+        for event in column.events {
+            let frame = blockFrame(event: event, columnWidth: columnWidth)
+            let handle = CGRect(
+                x: frame.minX,
+                y: frame.maxY - 16,
+                width: frame.width,
+                height: 16
+            )
+            if handle.insetBy(dx: -1, dy: -0.5).contains(local) {
+                return DurationCapsuleTarget(
+                    taskID: event.task.id,
+                    duration: event.task.duration,
+                    rect: durationCapsuleRect(
+                        columnIndex: index,
+                        columnWidth: columnWidth,
+                        event: event
+                    )
+                )
+            }
         }
         return nil
     }

@@ -658,6 +658,23 @@ struct HourDurationPanBridge: UIViewRepresentable {
                 in: scroll,
                 locationInScroll: locationInScroll
             )
+            // Title StaticText stays Details (`b8f1337`). Do not use lagged
+            // Other UIView frames for the handle (`aff9919`).
+            if let titleID = CalendarLayout.titleStaticTextTaskID(from: hitView) {
+                return .blockBody(taskID: titleID)
+            }
+            let contentPoint = CalendarLayout.blockFramePoint(
+                locationInScroll: locationInScroll,
+                scroll: scroll,
+                headerHeight: parent.headerHeight
+            )
+            if let handle = CalendarLayout.paintedBlockFrameHandle(
+                contentPoint: contentPoint,
+                columns: parent.liveColumns(),
+                columnWidth: parent.columnWidth
+            ) {
+                return .capsule(handle)
+            }
             if let painted = CalendarLayout.paintedCardHit(
                 from: hitView,
                 locationInScroll: locationInScroll,
@@ -672,11 +689,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
             }
             // `6b5a0c4` empty-hour path — nil / hour-grid `hitTest`.
             return CalendarLayout.hourCanvasHit(
-                contentPoint: CalendarLayout.blockFramePoint(
-                    locationInScroll: locationInScroll,
-                    scroll: scroll,
-                    headerHeight: parent.headerHeight
-                ),
+                contentPoint: contentPoint,
                 columns: parent.liveColumns(),
                 columnWidth: parent.columnWidth,
                 pixelsPerHour: parent.pixelsPerHour,
@@ -776,23 +789,17 @@ struct HourDurationPanBridge: UIViewRepresentable {
             if capturedTaskID != nil { return }
             if let scroll {
                 let location = touch.location(in: scroll)
-                let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: location)
-                if let painted = CalendarLayout.paintedCardHit(
-                    from: view,
+                let contentPoint = CalendarLayout.blockFramePoint(
                     locationInScroll: location,
-                    in: scroll
-                ), case .capsule(let taskID) = painted {
-                    beginDurationSession(taskID: taskID)
-                    return
-                }
-                if let window = resolvedWindow(for: touch),
-                   let taskID = CalendarLayout.handleTaskID(
-                    windowPoint: touch.location(in: window),
-                    in: scroll,
-                    window: window
-                   )
-                {
-                    beginDurationSession(taskID: taskID)
+                    scroll: scroll,
+                    headerHeight: parent.headerHeight
+                )
+                if let handle = CalendarLayout.paintedBlockFrameHandle(
+                    contentPoint: contentPoint,
+                    columns: parent.liveColumns(),
+                    columnWidth: parent.columnWidth
+                ) {
+                    beginDurationSession(taskID: handle.taskID, duration: handle.duration)
                     return
                 }
             }
