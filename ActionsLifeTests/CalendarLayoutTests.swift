@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 @testable import ActionsLife
 
@@ -52,6 +53,590 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(CalendarLayout.hourLabel(0), "0")
     }
 
+    func testDurationHandleSitsOnBlockBottomNotPositionSlot() {
+        // 30 min at 50px/hour is below 36pt card floor; handle is the bottom 28pt.
+        let y = CalendarLayout.y(fromMinutes: 22 * 60, pixelsPerHour: 50)
+        XCTAssertEqual(y, 22 * 50, accuracy: 0.01)
+        let top = CalendarLayout.durationHandleTop(duration: 30, y: y, pixelsPerHour: 50, handle: 28)
+        XCTAssertEqual(top, y + 36 - 28, accuracy: 0.01)
+        XCTAssertGreaterThan(top, 21 * 50)
+    }
+
+    func testBlockContainsStopsComposerOnDurationEdge() {
+        let placed = CalendarLayout.placeTimed(
+            [event(time: "02:00", duration: 30)],
+            pixelsPerHour: 50
+        )
+        XCTAssertEqual(placed.count, 1)
+        let column: CGFloat = 220
+        XCTAssertTrue(
+            CalendarLayout.blockContains(
+                location: CGPoint(x: 40, y: placed[0].y + 20),
+                event: placed[0],
+                columnWidth: column
+            )
+        )
+        XCTAssertFalse(
+            CalendarLayout.blockContains(
+                location: CGPoint(x: 40, y: placed[0].y - 8),
+                event: placed[0],
+                columnWidth: column
+            )
+        )
+    }
+
+    func testEmptyHourTapIsNotSwallowedByAfternoonBlock() {
+        // Seed-like: 12:30 for 106 min must not eat an hour-2 SpatialTap (`d94cb61`).
+        let placed = CalendarLayout.placeTimed(
+            [event(time: "12:30", duration: 106)],
+            pixelsPerHour: 50
+        )
+        let column: CGFloat = 220
+        let hour2 = CGPoint(x: 40, y: 2 * 50 + 10)
+        XCTAssertFalse(
+            CalendarLayout.blockContains(location: hour2, event: placed[0], columnWidth: column)
+        )
+        XCTAssertTrue(
+            CalendarLayout.blockContains(
+                location: CGPoint(x: 40, y: placed[0].y + 10),
+                event: placed[0],
+                columnWidth: column
+            )
+        )
+        // Y-only would have treated the trailing gutter as “on the block”.
+        XCTAssertFalse(
+            CalendarLayout.blockContains(
+                location: CGPoint(x: column + 24, y: placed[0].y + 10),
+                event: placed[0],
+                columnWidth: column
+            )
+        )
+    }
+
+    func testDurationHandleWindowRectIsBottomBandNotCardBody() {
+        let card = CGRect(x: 40, y: 200, width: 200, height: 36)
+        let handle = CalendarLayout.durationHandleWindowRect(
+            handleInWindow: .zero,
+            hostInWindow: card,
+            handleHeight: 16
+        )
+        XCTAssertEqual(handle.height, 16, accuracy: 0.01)
+        XCTAssertEqual(handle.maxY, card.maxY, accuracy: 0.01)
+        XCTAssertFalse(
+            CalendarLayout.touchHitsCapsule(CGPoint(x: card.midX, y: card.minY + 8), capsule: handle),
+            "card body must still open Details"
+        )
+        XCTAssertTrue(
+            CalendarLayout.touchHitsCapsule(CGPoint(x: card.midX, y: handle.midY), capsule: handle)
+        )
+        let painted = CGRect(x: 40, y: 220, width: 200, height: 16)
+        XCTAssertEqual(
+            CalendarLayout.durationHandleWindowRect(handleInWindow: painted, hostInWindow: card).height,
+            16,
+            accuracy: 0.01
+        )
+    }
+
+    func testHourContentPointDoesNotDoubleCountOffset() {
+        // Classic UIScrollView: bounds.origin == contentOffset.
+        let classic = CalendarLayout.hourContentPoint(
+            locationInScroll: CGPoint(x: 40, y: 270),
+            contentOffset: CGPoint(x: 0, y: 200),
+            boundsOrigin: CGPoint(x: 0, y: 200)
+        )
+        XCTAssertEqual(classic.x, 40, accuracy: 0.01)
+        XCTAssertEqual(classic.y, 270, accuracy: 0.01)
+        // SwiftUI UIScrollView: bounds.origin stays zero.
+        let swiftUI = CalendarLayout.hourContentPoint(
+            locationInScroll: CGPoint(x: 40, y: 70),
+            contentOffset: CGPoint(x: 0, y: 200),
+            boundsOrigin: .zero
+        )
+        XCTAssertEqual(swiftUI.x, 40, accuracy: 0.01)
+        XCTAssertEqual(swiftUI.y, 270, accuracy: 0.01)
+    }
+
+    func testHourContentPointAddsParentDayOffsetWhenHourScrollerIsViewportWide() {
+        // Nested 1-axis: hour scroller is viewport-wide; today is column 14.
+        // Finger on the painted 16pt capsule must hit that rect (`e2fba41`
+        // missed capsules at todayIndex × columnWidth).
+        let placed = CalendarLayout.placeTimed(
+            [event(time: "06:00", duration: 30)],
+            pixelsPerHour: 50
+        )[0]
+        let columnWidth: CGFloat = 220
+        let columnIndex = 14
+        let capsule = CalendarLayout.durationCapsuleRect(
+            columnIndex: columnIndex,
+            columnWidth: columnWidth,
+            event: placed
+        )
+        let hourOffsetY: CGFloat = 2 * 50
+        let viewportX = capsule.midX - CGFloat(columnIndex) * columnWidth
+        let viewportY = capsule.midY - hourOffsetY
+        let content = CalendarLayout.hourContentPoint(
+            locationInScroll: CGPoint(x: viewportX, y: viewportY),
+            contentOffset: CGPoint(x: 0, y: hourOffsetY),
+            boundsOrigin: .zero,
+            hourContentWidth: 390,
+            hourBoundsWidth: 390,
+            horizontalContentOffset: CGFloat(columnIndex) * columnWidth
+        )
+        XCTAssertEqual(content.x, capsule.midX, accuracy: 0.01)
+        XCTAssertEqual(content.y, capsule.midY, accuracy: 0.01)
+        let hit = CalendarLayout.hitDurationCapsule(
+            contentPoint: content,
+            capsules: [
+                CalendarLayout.DurationCapsuleTarget(taskID: "timed", duration: 30, rect: capsule)
+            ]
+        )
+        XCTAssertEqual(hit?.taskID, "timed")
+        let title = CalendarLayout.hourContentPoint(
+            locationInScroll: CGPoint(x: viewportX, y: placed.y + 8 - hourOffsetY),
+            contentOffset: CGPoint(x: 0, y: hourOffsetY),
+            boundsOrigin: .zero,
+            hourContentWidth: 390,
+            hourBoundsWidth: 390,
+            horizontalContentOffset: CGFloat(columnIndex) * columnWidth
+        )
+        XCTAssertNil(
+            CalendarLayout.hitDurationCapsule(
+                contentPoint: title,
+                capsules: [
+                    CalendarLayout.DurationCapsuleTarget(taskID: "timed", duration: 30, rect: capsule)
+                ]
+            ),
+            "title / card body must still open Details"
+        )
+        XCTAssertTrue(
+            CalendarLayout.blockContains(
+                location: CGPoint(x: viewportX, y: placed.y + 8),
+                event: placed,
+                columnWidth: columnWidth
+            )
+        )
+    }
+
+    func testHourContentPointDoesNotAddParentOffsetWhenHourContentIsFullWidth() {
+        let point = CalendarLayout.hourContentPoint(
+            locationInScroll: CGPoint(x: 14 * 220 + 40, y: 70),
+            contentOffset: CGPoint(x: 0, y: 200),
+            boundsOrigin: .zero,
+            hourContentWidth: 35 * 220,
+            hourBoundsWidth: 390,
+            horizontalContentOffset: 14 * 220
+        )
+        XCTAssertEqual(point.x, 14 * 220 + 40, accuracy: 0.01)
+        XCTAssertEqual(point.y, 270, accuracy: 0.01)
+    }
+
+    func testHourContentPointDoesNotDoubleCountWhenLocationIsAlreadyInContentX() {
+        let point = CalendarLayout.hourContentPoint(
+            locationInScroll: CGPoint(x: 14 * 220 + 40, y: 70),
+            contentOffset: CGPoint(x: 0, y: 200),
+            boundsOrigin: .zero,
+            hourContentWidth: 390,
+            hourBoundsWidth: 390,
+            horizontalContentOffset: 14 * 220
+        )
+        XCTAssertEqual(point.x, 14 * 220 + 40, accuracy: 0.01)
+    }
+
+    func testHourCanvasHitEmptyHourIsTimedNotAllDay() {
+        // `605f886` parked PR3 timed in the all-day header (no 16pt capsule).
+        let placed = CalendarLayout.placeTimed(
+            [event(time: "06:00", duration: 30)],
+            pixelsPerHour: 50
+        )
+        let columns = [
+            CalendarLayout.HourCanvasColumn(dayISO: "2026-09-18", events: []),
+            CalendarLayout.HourCanvasColumn(dayISO: "2026-09-19", events: placed)
+        ]
+        let columnWidth: CGFloat = 220
+        let empty = CalendarLayout.hourCanvasHit(
+            contentPoint: CGPoint(x: columnWidth + 40, y: 4 * 50 + 10),
+            columns: columns,
+            columnWidth: columnWidth,
+            pixelsPerHour: 50,
+            snap: 15
+        )
+        XCTAssertEqual(empty, .emptyHour(dayISO: "2026-09-19", minutes: 4 * 60))
+        let title = CalendarLayout.hourCanvasHit(
+            contentPoint: CGPoint(x: columnWidth + 40, y: placed[0].y + 8),
+            columns: columns,
+            columnWidth: columnWidth,
+            pixelsPerHour: 50,
+            snap: 15
+        )
+        XCTAssertEqual(title, .blockBody(taskID: "timed"))
+        let capsuleRect = CalendarLayout.durationCapsuleRect(
+            columnIndex: 1,
+            columnWidth: columnWidth,
+            event: placed[0]
+        )
+        let handle = CalendarLayout.hourCanvasHit(
+            contentPoint: CGPoint(x: capsuleRect.midX, y: capsuleRect.midY),
+            columns: columns,
+            columnWidth: columnWidth,
+            pixelsPerHour: 50,
+            snap: 15
+        )
+        guard case .capsule(let target) = handle else {
+            return XCTFail("painted capsule must be a duration hit, not all-day")
+        }
+        XCTAssertEqual(target.taskID, "timed")
+        XCTAssertEqual(target.duration, 30, accuracy: 0.01)
+    }
+
+    func testBlockFramePointConvertHitsHour7BodyAndCapsule() {
+        // `54090ed` title tap on the hour-7 card opened empty-hour composer.
+        // Convert scroller bounds → canvas with UIView.convert, then
+        // contentOffset, so the point matches CalendarLayout.blockFrame.
+        let hourH: CGFloat = 50
+        let header: CGFloat = 52
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: header, width: 220, height: 400))
+        scroll.contentSize = CGSize(width: 220, height: 24 * hourH)
+        let canvas = UIView(frame: CGRect(x: 0, y: 0, width: 220, height: 24 * hourH))
+        scroll.addSubview(canvas)
+        scroll.contentOffset = CGPoint(x: 0, y: 3 * hourH)
+        scroll.layoutIfNeeded()
+
+        let placed = CalendarLayout.placeTimed(
+            [event(id: "pr3", time: "07:00", duration: 30)],
+            pixelsPerHour: 50
+        )[0]
+        let frame = CalendarLayout.blockFrame(event: placed, columnWidth: 220)
+        XCTAssertEqual(frame.minY, 7 * hourH, accuracy: 0.01)
+
+        let titleInCanvas = CGPoint(x: frame.midX, y: frame.minY + 8)
+        let titleInScroll = canvas.convert(titleInCanvas, to: scroll)
+        let titlePoint = CalendarLayout.blockFramePoint(
+            locationInScroll: titleInScroll,
+            scroll: scroll,
+            headerHeight: header
+        )
+        XCTAssertEqual(titlePoint.x, titleInCanvas.x, accuracy: 0.5)
+        XCTAssertEqual(titlePoint.y, titleInCanvas.y, accuracy: 0.5)
+
+        let columns = [
+            CalendarLayout.HourCanvasColumn(dayISO: "2026-09-19", events: [placed])
+        ]
+        XCTAssertEqual(
+            CalendarLayout.hourCanvasHit(
+                contentPoint: titlePoint,
+                columns: columns,
+                columnWidth: 220,
+                pixelsPerHour: 50,
+                snap: 15
+            ),
+            .blockBody(taskID: "pr3"),
+            "hour-7 title must be Details, not empty-hour create"
+        )
+
+        let capsuleInCanvas = CGPoint(x: frame.midX, y: frame.maxY - 4)
+        let capsuleInScroll = canvas.convert(capsuleInCanvas, to: scroll)
+        let capsulePoint = CalendarLayout.blockFramePoint(
+            locationInScroll: capsuleInScroll,
+            scroll: scroll,
+            headerHeight: header
+        )
+        guard case .capsule(let target) = CalendarLayout.hourCanvasHit(
+            contentPoint: capsulePoint,
+            columns: columns,
+            columnWidth: 220,
+            pixelsPerHour: 50,
+            snap: 15
+        ) else {
+            return XCTFail("hour-7 bottom 16pt must write setDuration")
+        }
+        XCTAssertEqual(target.taskID, "pr3")
+
+        let emptyInCanvas = CGPoint(x: 40, y: 4 * hourH + 10)
+        let emptyInScroll = canvas.convert(emptyInCanvas, to: scroll)
+        let emptyPoint = CalendarLayout.blockFramePoint(
+            locationInScroll: emptyInScroll,
+            scroll: scroll,
+            headerHeight: header
+        )
+        XCTAssertEqual(
+            CalendarLayout.hourCanvasHit(
+                contentPoint: emptyPoint,
+                columns: columns,
+                columnWidth: 220,
+                pixelsPerHour: 50,
+                snap: 15
+            ),
+            .emptyHour(dayISO: "2026-09-19", minutes: 4 * 60)
+        )
+    }
+
+    func testBlockFramePointAddsContentOffsetWhenConvertLandsInViewport() {
+        // SwiftUI hour scroller: convert onto the scroll view (bounds.origin
+        // stays 0). Adding contentOffset puts hour 7 on blockFrame.y.
+        let converted = CGPoint(x: 40, y: 7 * 50 + 8 - 3 * 50)
+        let point = CalendarLayout.blockFramePoint(
+            converted: converted,
+            contentOffset: CGPoint(x: 0, y: 3 * 50),
+            boundsOrigin: .zero,
+            headerHeight: 52,
+            canvasSize: CGSize(width: 220, height: 400),
+            contentSize: CGSize(width: 220, height: 24 * 50),
+            convertedFromScrollView: true
+        )
+        XCTAssertEqual(point.x, 40, accuracy: 0.01)
+        XCTAssertEqual(point.y, 7 * 50 + 8, accuracy: 0.01)
+        let placed = CalendarLayout.placeTimed(
+            [event(id: "pr3", time: "07:00", duration: 30)],
+            pixelsPerHour: 50
+        )
+        XCTAssertEqual(
+            CalendarLayout.hourCanvasHit(
+                contentPoint: point,
+                columns: [CalendarLayout.HourCanvasColumn(dayISO: "2026-09-19", events: placed)],
+                columnWidth: 220,
+                pixelsPerHour: 50,
+                snap: 15
+            ),
+            .blockBody(taskID: "pr3")
+        )
+    }
+
+    func testBlockFramePointAddsOffsetWhenContentCanvasSitsAtOrigin() {
+        // SwiftUI: content-sized host at (0,0), bounds.origin stays 0.
+        // convert is still viewport; contentOffset maps onto blockFrame.
+        let point = CalendarLayout.blockFramePoint(
+            converted: CGPoint(x: 40, y: 7 * 50 + 8 - 3 * 50),
+            contentOffset: CGPoint(x: 0, y: 3 * 50),
+            boundsOrigin: .zero,
+            headerHeight: 52,
+            canvasSize: CGSize(width: 220, height: 24 * 50),
+            contentSize: CGSize(width: 220, height: 24 * 50),
+            convertedFromScrollView: false,
+            canvasFrameOrigin: .zero
+        )
+        XCTAssertEqual(point.y, 7 * 50 + 8, accuracy: 0.01)
+    }
+
+    func testBlockFramePointDoesNotDoubleCountWhenCanvasIsShiftedByOffset() {
+        let point = CalendarLayout.blockFramePoint(
+            converted: CGPoint(x: 40, y: 7 * 50 + 8),
+            contentOffset: CGPoint(x: 0, y: 3 * 50),
+            boundsOrigin: .zero,
+            headerHeight: 52,
+            canvasSize: CGSize(width: 220, height: 24 * 50),
+            contentSize: CGSize(width: 220, height: 24 * 50),
+            convertedFromScrollView: false,
+            canvasFrameOrigin: CGPoint(x: 0, y: -3 * 50)
+        )
+        XCTAssertEqual(point.y, 7 * 50 + 8, accuracy: 0.01)
+    }
+
+    func testBlockFramePointSubtractsAllDayHeader() {
+        // Convert landed on a parent that still includes the sticky all-day
+        // row. Subtract headerHeight so y=0 is hour 0 / blockFrame.
+        let converted = CGPoint(x: 40, y: 52 + 7 * 50 + 8)
+        let point = CalendarLayout.blockFramePoint(
+            converted: converted,
+            contentOffset: .zero,
+            boundsOrigin: .zero,
+            headerHeight: 52,
+            canvasSize: CGSize(width: 220, height: 52 + 24 * 50),
+            contentSize: CGSize(width: 220, height: 24 * 50),
+            convertedFromScrollView: false
+        )
+        XCTAssertEqual(point.y, 7 * 50 + 8, accuracy: 0.01)
+        XCTAssertEqual(point.x, 40, accuracy: 0.01)
+    }
+
+    func testLiveColumnsExposeJustCreatedHour7Card() {
+        // Coordinator struct snapshot at `54090ed` was empty after create.
+        // hourCanvasColumns must read the live task list.
+        let created = event(id: "pr3", time: "07:00", duration: 30)
+        var tasks: [String: [TaskSnapshot]] = ["2026-09-19": []]
+        var columns = CalendarLayout.hourCanvasColumns(
+            dayISOs: ["2026-09-19"],
+            tasksOnDay: { tasks[$0] ?? [] },
+            pixelsPerHour: 50
+        )
+        XCTAssertTrue(columns[0].events.isEmpty)
+        tasks["2026-09-19"] = [created]
+        columns = CalendarLayout.hourCanvasColumns(
+            dayISOs: ["2026-09-19"],
+            tasksOnDay: { tasks[$0] ?? [] },
+            pixelsPerHour: 50
+        )
+        let title = CGPoint(x: 40, y: 7 * 50 + 8)
+        XCTAssertEqual(
+            CalendarLayout.hourCanvasHit(
+                contentPoint: title,
+                columns: columns,
+                columnWidth: 220,
+                pixelsPerHour: 50,
+                snap: 15
+            ),
+            .blockBody(taskID: "pr3")
+        )
+        let capsule = CalendarLayout.durationCapsuleRect(
+            columnIndex: 0,
+            columnWidth: 220,
+            event: columns[0].events[0]
+        )
+        guard case .capsule = CalendarLayout.hourCanvasHit(
+            contentPoint: CGPoint(x: capsule.midX, y: capsule.midY),
+            columns: columns,
+            columnWidth: 220,
+            pixelsPerHour: 50,
+            snap: 15
+        ) else {
+            return XCTFail("live hour-7 capsule must be setDuration")
+        }
+    }
+
+    func testBlockFrameOriginMatchesPaintedCard() {
+        // Spacer layout places the card at this origin (`e2fba41`/`c7a355e`).
+        let placed = CalendarLayout.placeTimed(
+            [event(time: "05:00", duration: 30)],
+            pixelsPerHour: 50
+        )[0]
+        let frame = CalendarLayout.blockFrame(event: placed, columnWidth: 220)
+        XCTAssertEqual(frame.minX, 6, accuracy: 0.01)
+        XCTAssertEqual(frame.minY, 5 * 50, accuracy: 0.01)
+        XCTAssertEqual(frame.height, 36, accuracy: 0.01)
+        XCTAssertEqual(frame.width, 208, accuracy: 0.01)
+        let capsule = CalendarLayout.durationCapsuleRect(
+            columnIndex: 0,
+            columnWidth: 220,
+            event: placed
+        )
+        XCTAssertEqual(capsule.minY, frame.maxY - 16, accuracy: 0.01)
+        XCTAssertEqual(capsule.maxY, frame.maxY, accuracy: 0.01)
+        XCTAssertEqual(capsule.height, HomeChrome.durationCapsuleHit, accuracy: 0.01)
+        XCTAssertFalse(
+            CalendarLayout.touchHitsCapsule(
+                CGPoint(x: frame.midX, y: frame.minY + 8),
+                capsule: capsule
+            ),
+            "title / card body must still open Details"
+        )
+        let bodyHeight = frame.height - HomeChrome.durationCapsuleHit
+        XCTAssertEqual(bodyHeight, 20, accuracy: 0.01)
+        XCTAssertEqual(frame.minY + bodyHeight, capsule.minY, accuracy: 0.01)
+    }
+
+    func testDurationCapsuleRectIsBottomBandInContentSpace() {
+        let placed = CalendarLayout.placeTimed(
+            [event(time: "03:00", duration: 30)],
+            pixelsPerHour: 50
+        )[0]
+        let capsule = CalendarLayout.durationCapsuleRect(
+            columnIndex: 14,
+            columnWidth: 220,
+            event: placed
+        )
+        XCTAssertEqual(capsule.minX, 14 * 220 + 6, accuracy: 0.01)
+        XCTAssertEqual(capsule.minY, placed.y + 36 - 16, accuracy: 0.01)
+        XCTAssertEqual(capsule.height, 16, accuracy: 0.01)
+        XCTAssertEqual(capsule.width, 220 - 12, accuracy: 0.01)
+        XCTAssertFalse(
+            CalendarLayout.touchHitsCapsule(
+                CGPoint(x: capsule.midX, y: placed.y + 8),
+                capsule: capsule
+            )
+        )
+        XCTAssertTrue(
+            CalendarLayout.touchHitsCapsule(
+                CGPoint(x: capsule.midX, y: capsule.midY),
+                capsule: capsule
+            )
+        )
+    }
+
+    func testDurationCapsuleSitsOnCardNotNextHour() {
+        // 106 min from midnight is shorter than two hours; the capsule is the
+        // card bottom, not a stray overlay on empty hour 2 (`23f0dce`).
+        let placed = CalendarLayout.placeTimed(
+            [event(time: "00:00", duration: 106)],
+            pixelsPerHour: 50
+        )
+        let cardBottom = placed[0].y + max(placed[0].height, 36)
+        let handleTop = CalendarLayout.durationHandleTop(
+            duration: 106,
+            y: placed[0].y,
+            pixelsPerHour: 50,
+            handle: 28
+        )
+        XCTAssertEqual(handleTop + 28, cardBottom, accuracy: 0.01)
+        XCTAssertLessThan(cardBottom, 2 * 50)
+        XCTAssertFalse(
+            CalendarLayout.blockContains(
+                location: CGPoint(x: 40, y: 2 * 50),
+                event: placed[0],
+                columnWidth: 220
+            )
+        )
+        XCTAssertTrue(
+            CalendarLayout.blockContains(
+                location: CGPoint(x: 40, y: handleTop + 14),
+                event: placed[0],
+                columnWidth: 220
+            )
+        )
+    }
+
+    func testPreviewDurationMatchesWebPixelsPerHour() {
+        // 50 px/hour → 1.2 minutes per point; +50pt adds 60 minutes.
+        let preview = CalendarLayout.previewDuration(start: 30, deltaY: 50, pixelsPerHour: 50)
+        XCTAssertEqual(preview, 90, accuracy: 0.01)
+        let floor = CalendarLayout.previewDuration(start: 5, deltaY: -400, pixelsPerHour: 50)
+        XCTAssertEqual(floor, Double(CalendarLayout.minimumEventHeight) / 50 * 60, accuracy: 0.01)
+    }
+
+    func testSnapDurationRoundsToInterval() {
+        XCTAssertEqual(CalendarLayout.snapDuration(37, snap: 15), 30)
+        XCTAssertEqual(CalendarLayout.snapDuration(38, snap: 15), 45)
+        XCTAssertEqual(CalendarLayout.snapDuration(2, snap: 15), 15)
+    }
+
+    func testNowScrollYLeavesHeadroom() {
+        let calendar = Calendar(identifier: .gregorian)
+        var comps = DateComponents(year: 2026, month: 9, day: 18, hour: 10, minute: 0)
+        comps.timeZone = calendar.timeZone
+        let now = calendar.date(from: comps) ?? Date()
+        XCTAssertEqual(
+            CalendarLayout.nowScrollY(now: now, calendar: calendar, pixelsPerHour: 50, headroom: 48),
+            10 * 50 - 48,
+            accuracy: 0.01
+        )
+    }
+
+    func testTimedContentOffsetJumpsToEveningNowNotMorning() {
+        let calendar = Calendar(identifier: .gregorian)
+        var comps = DateComponents(year: 2026, month: 9, day: 18, hour: 22, minute: 0)
+        comps.timeZone = calendar.timeZone
+        let now = calendar.date(from: comps) ?? Date()
+        let offset = CalendarLayout.timedContentOffset(
+            todayIndex: 14,
+            columnWidth: 220,
+            now: now,
+            calendar: calendar,
+            pixelsPerHour: 50,
+            headroom: 48
+        )
+        XCTAssertEqual(offset.x, 14 * 220, accuracy: 0.01)
+        XCTAssertEqual(offset.y, 22 * 50 - 48, accuracy: 0.01)
+        XCTAssertGreaterThan(offset.y, 15 * 50)
+        let origin = CalendarLayout.timedContentOffset(
+            todayIndex: 0,
+            columnWidth: 220,
+            now: now,
+            calendar: calendar,
+            pixelsPerHour: 50,
+            headroom: 48
+        )
+        XCTAssertEqual(origin.x, 0, accuracy: 0.01)
+        XCTAssertEqual(origin.y, offset.y, accuracy: 0.01)
+    }
+
     func testDayWindowIsPastPlusTodayPlusFuture() {
         let calendar = Calendar(identifier: .gregorian)
         var comps = DateComponents(year: 2026, month: 9, day: 18)
@@ -61,6 +646,859 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(days.count, 6)
         XCTAssertEqual(DateISO.dayString(from: days.first ?? now, calendar: calendar), "2026-09-16")
         XCTAssertEqual(DateISO.dayString(from: days.last ?? now, calendar: calendar), "2026-09-21")
+    }
+
+    func testHitTestPaintedCardBodyAndCapsuleNotEmptyHour() {
+        let hourH: CGFloat = 50
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 220, height: 400))
+        let canvas = UIView(frame: CGRect(x: 0, y: 0, width: 220, height: 24 * hourH))
+        scroll.addSubview(canvas)
+        scroll.contentSize = canvas.bounds.size
+
+        let grid = UIView(frame: canvas.bounds)
+        grid.accessibilityIdentifier = "calendar.hour-grid"
+        canvas.addSubview(grid)
+
+        let card = UIView(frame: CGRect(x: 6, y: 8 * hourH, width: 208, height: 36))
+        card.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        canvas.addSubview(card)
+        let title = UIView(frame: CGRect(x: 0, y: 0, width: 208, height: 20))
+        card.addSubview(title)
+        let capsule = UIView(frame: CGRect(x: 0, y: 20, width: 208, height: 16))
+        capsule.accessibilityIdentifier = CalendarLayout.timedCapsuleAccessibilityID("pr3")
+        card.addSubview(capsule)
+        scroll.layoutIfNeeded()
+
+        func hit(_ canvasPoint: CGPoint) -> CalendarLayout.PaintedCardHit? {
+            let inScroll = canvas.convert(canvasPoint, to: scroll)
+            let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: inScroll)
+            return CalendarLayout.paintedCardHit(
+                from: view,
+                locationInScroll: inScroll,
+                in: scroll
+            )
+        }
+
+        XCTAssertEqual(
+            hit(CGPoint(x: 100, y: 8 * hourH + 8)),
+            .blockBody(taskID: "pr3")
+        )
+        XCTAssertEqual(
+            hit(CGPoint(x: 100, y: 8 * hourH + 28)),
+            .capsule(taskID: "pr3")
+        )
+        XCTAssertNil(
+            hit(CGPoint(x: 100, y: 4 * hourH + 10)),
+            "empty hour stays timed create"
+        )
+    }
+
+    func testHitTestIgnoresCanvasHostAndHourZeroSpacer() {
+        let hourH: CGFloat = 50
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 220, height: 400))
+        let canvas = UIView(frame: CGRect(x: 0, y: 0, width: 220, height: 24 * hourH))
+        scroll.addSubview(canvas)
+        scroll.contentSize = canvas.bounds.size
+
+        let host = UIView(frame: canvas.bounds)
+        host.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        canvas.addSubview(host)
+
+        let spacer = UIView(frame: CGRect(x: 0, y: 0, width: 220, height: 8 * hourH + 36))
+        spacer.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        canvas.addSubview(spacer)
+        scroll.layoutIfNeeded()
+
+        XCTAssertTrue(CalendarLayout.isHourCanvasHost(host, scroll: scroll))
+        XCTAssertFalse(CalendarLayout.isPaintedCardSized(spacer, scroll: scroll))
+
+        func hit(_ canvasPoint: CGPoint) -> CalendarLayout.PaintedCardHit? {
+            let inScroll = canvas.convert(canvasPoint, to: scroll)
+            let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: inScroll)
+            return CalendarLayout.paintedCardHit(
+                from: view,
+                locationInScroll: inScroll,
+                in: scroll
+            )
+        }
+
+        XCTAssertNil(hit(CGPoint(x: 100, y: 8 * hourH + 8)))
+        XCTAssertNil(hit(CGPoint(x: 100, y: 4 * hourH + 10)))
+    }
+
+    func testTaskIDIsReadFromCapsuleUIView() {
+        let card = UIView(frame: CGRect(x: 50, y: 292, width: 168, height: 39.3))
+        card.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3-event")
+        let capsule = UIView(frame: CGRect(x: 0, y: 23.3, width: 168, height: 16))
+        capsule.accessibilityIdentifier = CalendarLayout.timedCapsuleAccessibilityID("pr3-event")
+        capsule.accessibilityValue = "pr3-event"
+        card.addSubview(capsule)
+        XCTAssertEqual(CalendarLayout.taskID(fromPaintedView: capsule), "pr3-event")
+        XCTAssertEqual(CalendarLayout.taskID(fromPaintedView: card), "pr3-event")
+    }
+
+    func testPaintedCapsuleBandIsBottom16ptOfA11yCardFrame() {
+        // `94e965c` a11y `calendar.timed.*` frame (50, 280.3, 168, 39.3).
+        // Press-drag y≈303.6–319.6 is the capsule; title stays Details.
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        scroll.contentSize = CGSize(width: 390, height: 1200)
+        let card = UIView(frame: CGRect(x: 50, y: 280.3, width: 168, height: 39.3))
+        card.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        scroll.addSubview(card)
+        scroll.layoutIfNeeded()
+
+        let band = CalendarLayout.paintedCapsuleBand(of: card, in: scroll)
+        XCTAssertEqual(band.height, 16, accuracy: 0.05)
+        XCTAssertEqual(band.minY, 303.6, accuracy: 0.05)
+        XCTAssertEqual(band.maxY, 319.6, accuracy: 0.05)
+
+        XCTAssertTrue(
+            CalendarLayout.touchHitsPaintedCapsule(
+                locationInScroll: CGPoint(x: 134, y: 310),
+                card: card,
+                in: scroll
+            )
+        )
+        XCTAssertFalse(
+            CalendarLayout.touchHitsPaintedCapsule(
+                locationInScroll: CGPoint(x: 134, y: 288),
+                card: card,
+                in: scroll
+            ),
+            "title / card body must still open Details"
+        )
+
+        func hit(_ y: CGFloat) -> CalendarLayout.PaintedCardHit? {
+            let location = CGPoint(x: 134, y: y)
+            let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: location)
+            return CalendarLayout.paintedCardHit(
+                from: view,
+                locationInScroll: location,
+                in: scroll
+            )
+        }
+
+        XCTAssertEqual(hit(288), .blockBody(taskID: "pr3"))
+        XCTAssertEqual(hit(310), .capsule(taskID: "pr3"))
+        // `e728c7b` a11y `calendar.timed.*` `(50, 315.3, 168, 39.3)` —
+        // center tap must stay Details, not the duration pan.
+        let e728 = UIView(frame: CGRect(x: 50, y: 315.3, width: 168, height: 39.3))
+        e728.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        scroll.addSubview(e728)
+        XCTAssertEqual(
+            CalendarLayout.paintedCardHit(
+                from: e728,
+                locationInScroll: CGPoint(x: 134, y: 315.3 + 19.65),
+                in: scroll
+            ),
+            .blockBody(taskID: "pr3"),
+            "card-body a11y tap must open Details"
+        )
+        XCTAssertEqual(
+            CalendarLayout.paintedCardHit(
+                from: e728,
+                locationInScroll: CGPoint(x: 134, y: 346.7),
+                in: scroll
+            ),
+            .capsule(taskID: "pr3"),
+            "bottom 16pt stays duration"
+        )
+        XCTAssertEqual(hit(303.6), .capsule(taskID: "pr3"))
+        XCTAssertEqual(hit(319.0), .capsule(taskID: "pr3"))
+
+        // `b52d8de` a11y frame sat 11pt higher; card-local bottom 16pt still
+        // claims the capsule so the pan (not the hour scroller) gets the touch.
+        let shifted = UIView(frame: CGRect(x: 50, y: 269.3, width: 168, height: 39.3))
+        shifted.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        scroll.addSubview(shifted)
+        XCTAssertTrue(
+            CalendarLayout.touchHitsPaintedCapsule(
+                locationInScroll: CGPoint(x: 134, y: 269.3 + 39.3 - 8),
+                card: shifted,
+                in: scroll
+            )
+        )
+        XCTAssertFalse(
+            CalendarLayout.touchHitsPaintedCapsule(
+                locationInScroll: CGPoint(x: 134, y: 269.3 + 8),
+                card: shifted,
+                in: scroll
+            ),
+            "title / card body must still open Details"
+        )
+    }
+
+    func testEightyPointCapsuleDragWritesEndPastThirtyMinutes() {
+        // Simulator `05a5968`: 80pt (330.7→410.7) must not stay 30 min.
+        // minutes = start + deltaY / hourHeight * 60.
+        let hourH = CalendarLayout.hourHeight(pixelsPerHour: 50)
+        XCTAssertEqual(hourH, 50, accuracy: 0.01)
+        let minutes = CalendarLayout.durationFromLocationDelta(
+            start: 30,
+            locationDeltaY: 80,
+            pixelsPerHour: 50
+        )
+        XCTAssertEqual(minutes, 30 + 80 / 50 * 60, accuracy: 0.01)
+        XCTAssertGreaterThan(minutes, 30)
+        XCTAssertEqual(CalendarLayout.snapDuration(minutes, snap: 15), 120)
+        XCTAssertGreaterThan(
+            CalendarLayout.blockFrameHeight(duration: minutes, y: 9 * 50, pixelsPerHour: 50),
+            39
+        )
+    }
+
+    func testWindowFollowAtEightyPointsBelowCardStillWritesDuration() {
+        // `81ba98a`: drag starts in the 16pt capsule, then moves 80 pt
+        // *below* the 39pt card. If tracking dies at the handle edge,
+        // Details shows ~35 min and the painted block stays 39pt.
+        // minutes = 30 + (windowY − beganWindowY) / hourHeight * 60.
+        let card = CGRect(x: 50, y: 280.3, width: 168, height: 39.3)
+        let beganWindowY = card.maxY - 8
+        let movedWindowY = card.maxY + 80
+        XCTAssertGreaterThan(movedWindowY - beganWindowY, 16)
+
+        let hourH = CalendarLayout.hourHeight(pixelsPerHour: 50)
+        let minutes = 30 + Double(movedWindowY - beganWindowY) / Double(hourH) * 60
+        XCTAssertEqual(
+            CalendarLayout.durationFromLocationDelta(
+                start: 30,
+                locationDeltaY: movedWindowY - beganWindowY,
+                pixelsPerHour: 50
+            ),
+            minutes,
+            accuracy: 0.01
+        )
+        XCTAssertGreaterThan(minutes, 35)
+        XCTAssertEqual(CalendarLayout.snapDuration(minutes, snap: 15), 135)
+        XCTAssertGreaterThan(
+            CalendarLayout.blockFrameHeight(duration: minutes, y: 8 * 50, pixelsPerHour: 50),
+            39
+        )
+
+        var live: [(String, Double)] = []
+        var commits: [(String, Double)] = []
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { [] },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: 50,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { live.append(($0, $1)) },
+            onEnded: { commits.append(($0, $1)) },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        coordinator.bindStoreWrites(from: bridge)
+        XCTAssertTrue(
+            coordinator.hasLiveSetDurationCallback(),
+            "81d22bb locked the scroller but writeDuration was nil"
+        )
+        coordinator.startWindowFollow(taskID: "pr3", startDuration: 30, beganWindowY: beganWindowY)
+        // Callback must fire during the 80 pt drag (`e728c7b` / `28ee931`
+        // never wrote setDuration for this event after the handle edge).
+        coordinator.followWindowY(beganWindowY + 20, ended: false)
+        XCTAssertEqual(live.count, 1)
+        XCTAssertEqual(live[0].0, "pr3")
+        coordinator.followWindowY(movedWindowY, ended: false)
+        XCTAssertEqual(live.count, 2)
+        XCTAssertEqual(live.last?.1 ?? 0, minutes, accuracy: 0.01)
+        XCTAssertGreaterThan(live.last?.1 ?? 0, 35)
+        XCTAssertGreaterThan(live[1].1, live[0].1)
+        coordinator.followWindowY(movedWindowY, ended: true)
+        XCTAssertEqual(commits.last?.0, "pr3")
+        XCTAssertEqual(commits.last?.1, CalendarLayout.snapDuration(minutes, snap: 15))
+    }
+
+    func testEightyPointHandleFollowGrowsPaintedBlockFrame() {
+        // `58714d8`: callback / setDuration logs are not enough. The painted
+        // `calendar.timed.*` capsule must get taller. +80 pt on the 16pt
+        // handle uses the hour-grid hourHeight.
+        let pixels = 50.0
+        let hourH = CalendarLayout.hourHeight(pixelsPerHour: pixels)
+        XCTAssertEqual(hourH, 50, accuracy: 0.01)
+        let start = event(id: "pr3", time: "10:00", duration: 30)
+        let before = CalendarLayout.placeTimed([start], pixelsPerHour: pixels)[0]
+        let beforeFrame = CalendarLayout.blockFrame(event: before, columnWidth: 220)
+        XCTAssertEqual(beforeFrame.height, 36, accuracy: 0.01)
+
+        let minutes = CalendarLayout.paintedHandleMinutes(
+            start: 30,
+            windowDeltaY: 80,
+            pixelsPerHour: pixels
+        )
+        XCTAssertEqual(minutes, 30 + 80 / hourH * 60, accuracy: 0.01)
+        XCTAssertGreaterThan(minutes, 35)
+
+        var live: Double = 30
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { [] },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: pixels,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { id, value in
+                XCTAssertEqual(id, "pr3")
+                live = value
+            },
+            onEnded: { _, _ in },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        coordinator.bindStoreWrites(from: bridge)
+        XCTAssertTrue(coordinator.hasLiveSetDurationCallback())
+        coordinator.startWindowFollow(taskID: "pr3", startDuration: 30, beganWindowY: 310.7)
+        coordinator.followWindowY(310.7 + 80, ended: false)
+        XCTAssertEqual(live, minutes, accuracy: 0.01)
+
+        let grown = event(id: "pr3", time: "10:00", duration: live)
+        let after = CalendarLayout.placeTimed([grown], pixelsPerHour: pixels)[0]
+        let afterFrame = CalendarLayout.blockFrame(event: after, columnWidth: 220)
+        XCTAssertGreaterThan(afterFrame.height, beforeFrame.height)
+        XCTAssertGreaterThan(afterFrame.height, 39)
+        XCTAssertEqual(afterFrame.height, after.height, accuracy: 0.01)
+        XCTAssertEqual(after.height, CGFloat(minutes / 60) * hourH, accuracy: 0.01)
+    }
+
+    func testLiveRecognizerFollowCallsSetDurationForPaintedTaskID() {
+        // `00f3382` display-link / `touchesMoved` is not the XCUI path.
+        // The +80 pt handle drag claims the hour scroller pan (hours stay).
+        // That same claim/pin follow must call `TaskTreeStore.setDuration`.
+        var storeWrites: [(String, Double)] = []
+        let pixels = 50.0
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { [] },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: pixels,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { _, _ in
+                XCTFail("live store write must not fall back to onChanged")
+            },
+            onEnded: { _, _ in },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        coordinator.bindStoreWrites(from: bridge)
+        coordinator.installLiveSetDuration { id, minutes in
+            storeWrites.append((id, minutes))
+        }
+        XCTAssertTrue(coordinator.hasLiveStoreSetDuration())
+        coordinator.bindClaimedHandleForTest(taskID: "pr3", startDuration: 30, beganWindowY: 344)
+        coordinator.followClaimedHourScroller(windowY: 344 + 80, ended: false)
+        XCTAssertEqual(storeWrites.count, 1)
+        XCTAssertEqual(storeWrites[0].0, "pr3")
+        let minutes = CalendarLayout.paintedHandleMinutes(
+            start: 30,
+            windowDeltaY: 80,
+            pixelsPerHour: pixels
+        )
+        XCTAssertEqual(storeWrites[0].1, minutes, accuracy: 0.01)
+        XCTAssertGreaterThan(storeWrites[0].1, 30)
+        XCTAssertEqual(minutes, 30 + 80 / 50 * 60, accuracy: 0.01)
+
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        scroll.contentSize = CGSize(width: 390, height: 1200)
+        scroll.contentOffset = CGPoint(x: 0, y: 296)
+        coordinator.lockOffsets(from: scroll)
+        XCTAssertTrue(coordinator.hasPinnedClaim(), "claim pins hours during the drag")
+        coordinator.followClaimedHourScroller(windowY: 344 + 40, ended: false)
+        XCTAssertTrue(coordinator.hasPinnedClaim(), "pin holds through follow writes")
+        coordinator.finishClaimedHourPan(windowY: 344 + 80)
+        XCTAssertFalse(coordinator.hasPinnedClaim(), "dropClaim() on lift unsticks the hour grid")
+        guard let lastMinutes = storeWrites.last?.1 else {
+            return XCTFail("lift must write setDuration")
+        }
+        XCTAssertEqual(lastMinutes, minutes, accuracy: 0.01)
+    }
+
+    func testXcuiHandleWindowDeltaIsEightyNotLocationInNil() {
+        // `9cd088e`: `location(in: nil)` stays 0. XCUI handle Other
+        // `(134.0, 320.0)` → `400.0` is +80 pt in the same window.
+        let nilSpace: UIView? = nil
+        XCTAssertNil(nilSpace, "do not call location(in: nil)")
+        let beganWindowY: CGFloat = 320
+        let fingerWindowY: CGFloat = 400
+        let deltaY = fingerWindowY - beganWindowY
+        XCTAssertEqual(deltaY, 80 as CGFloat, accuracy: 0.01)
+        let minutes = CalendarLayout.paintedHandleMinutes(
+            start: 30,
+            windowDeltaY: deltaY,
+            pixelsPerHour: 50
+        )
+        XCTAssertEqual(minutes, 30 + 80 / 50 * 60, accuracy: 0.01)
+        XCTAssertGreaterThan(minutes, 30)
+        XCTAssertEqual(
+            CalendarLayout.paintedHandleMinutes(
+                start: 30,
+                windowDeltaY: 0,
+                pixelsPerHour: 50
+            ),
+            30,
+            accuracy: 0.01,
+            "location(in: nil) delta must not be the live write"
+        )
+    }
+
+    func testPinnedScrollerTranslationZeroUsesWindowTouchDelta() {
+        // `953443c`: claim pins `contentOffset`, so pan translation / offset
+        // delta is ~0. Finger window Y 325 → 405 must still write
+        // `30 + 80 / hourHeight * 60` for the painted card id.
+        let pinnedTranslation: CGFloat = 0
+        XCTAssertEqual(pinnedTranslation, 0)
+        let beganWindowY: CGFloat = 325
+        let fingerWindowY: CGFloat = 405
+        let pixels = 50.0
+        let minutes = CalendarLayout.paintedHandleMinutes(
+            start: 30,
+            windowDeltaY: fingerWindowY - beganWindowY,
+            pixelsPerHour: pixels
+        )
+        XCTAssertEqual(minutes, 30 + 80 / 50 * 60, accuracy: 0.01)
+        XCTAssertGreaterThan(minutes, 30)
+
+        var storeWrites: [(String, Double)] = []
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { [] },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: pixels,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { _, _ in
+                XCTFail("live store write must not fall back to onChanged")
+            },
+            onEnded: { _, _ in },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        coordinator.bindStoreWrites(from: bridge)
+        coordinator.installLiveSetDuration { id, value in
+            storeWrites.append((id, value))
+        }
+        coordinator.bindClaimedHandleForTest(
+            taskID: "pr3",
+            startDuration: 30,
+            beganWindowY: beganWindowY
+        )
+        coordinator.followClaimedHourScroller(windowY: fingerWindowY, ended: false)
+        XCTAssertEqual(storeWrites.count, 1)
+        XCTAssertEqual(storeWrites[0].0, "pr3")
+        XCTAssertEqual(storeWrites[0].1, minutes, accuracy: 0.01)
+    }
+
+    func testLockOffsetFollowWritesSetDurationBeforeDropClaim() {
+        // `fc366c5`: hours stayed during +80 (lockOffsets / follow). Handle
+        // `touchesEnded` may never run. The pin tick that holds hours must
+        // write `TaskTreeStore.setDuration` for the painted card id while
+        // the finger is at +80, before `dropClaim()`. Do not write 30.
+        var storeWrites: [(String, Double)] = []
+        let pixels = 50.0
+        let beganWindowY: CGFloat = 344
+        let fingerWindowY: CGFloat = 344 + 80
+        let minutes = CalendarLayout.paintedHandleMinutes(
+            start: 30,
+            windowDeltaY: 80,
+            pixelsPerHour: pixels
+        )
+        XCTAssertEqual(minutes, 30 + 80 / 50 * 60, accuracy: 0.01)
+        XCTAssertGreaterThan(minutes, 30)
+
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { [] },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: pixels,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { _, _ in
+                XCTFail("live store write must not fall back to onChanged")
+            },
+            onEnded: { _, _ in },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        coordinator.bindStoreWrites(from: bridge)
+        coordinator.installLiveSetDuration { id, value in
+            storeWrites.append((id, value))
+        }
+        coordinator.bindClaimedHandleForTest(
+            taskID: "pr3",
+            startDuration: 30,
+            beganWindowY: beganWindowY
+        )
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        scroll.contentSize = CGSize(width: 390, height: 1200)
+        scroll.contentOffset = CGPoint(x: 0, y: 305.3)
+        coordinator.lockOffsets(from: scroll)
+        XCTAssertTrue(coordinator.hasPinnedClaim(), "hours stay during the +80 drag")
+
+        coordinator.followWhileHoursPinned(windowY: beganWindowY)
+        XCTAssertTrue(storeWrites.isEmpty, "touch-down must not write 30")
+        XCTAssertTrue(coordinator.hasPinnedClaim())
+
+        coordinator.followWhileHoursPinned(windowY: fingerWindowY)
+        XCTAssertEqual(storeWrites.count, 1)
+        XCTAssertEqual(storeWrites[0].0, "pr3")
+        XCTAssertEqual(storeWrites[0].1, minutes, accuracy: 0.01)
+        XCTAssertGreaterThan(storeWrites[0].1, 30)
+        XCTAssertTrue(coordinator.hasPinnedClaim(), "pin holds through the write")
+        XCTAssertEqual(scroll.contentOffset.y, 305.3, accuracy: 0.01)
+
+        coordinator.dropClaim()
+        XCTAssertFalse(coordinator.hasPinnedClaim(), "dropClaim() unpins only")
+        XCTAssertEqual(storeWrites.count, 1, "dropClaim() must not write 30")
+        XCTAssertEqual(storeWrites[0].1, minutes, accuracy: 0.01)
+    }
+
+    func testHourPanChangedWritesSetDurationForPaintedTaskID() {
+        // `47d78b2`: lockOffsets display-link follow did not run. The hour
+        // UIPanGestureRecognizer `.changed` that pins contentOffset must
+        // write `recognizer.location(in: recognizer.view?.window)` vs
+        // touch-down Y for the painted `calendar.timed.*` id, before
+        // `dropClaim()`. If `.changed` has no session, the 16pt claim
+        // must start one.
+        var storeWrites: [(String, Double)] = []
+        let pixels = 50.0
+        let beganWindowY: CGFloat = 297
+        let fingerWindowY: CGFloat = 297 + 80
+        let minutes = CalendarLayout.paintedHandleMinutes(
+            start: 30,
+            windowDeltaY: 80,
+            pixelsPerHour: pixels
+        )
+        XCTAssertEqual(minutes, 30 + 80 / 50 * 60, accuracy: 0.01)
+        XCTAssertGreaterThan(minutes, 30)
+
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { [] },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: pixels,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { _, _ in
+                XCTFail("live store write must not fall back to onChanged")
+            },
+            onEnded: { _, _ in },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        coordinator.bindStoreWrites(from: bridge)
+        coordinator.installLiveSetDuration { id, value in
+            storeWrites.append((id, value))
+        }
+        coordinator.claimSixteenPointHandleForTest(
+            taskID: "pr3",
+            startDuration: 30,
+            beganWindowY: beganWindowY
+        )
+        XCTAssertFalse(coordinator.hasDurationSession(), "claim is not yet a session")
+        coordinator.ensureHandleSessionFromClaim()
+        XCTAssertTrue(coordinator.hasDurationSession(), "16pt claim must start a session")
+        XCTAssertEqual(coordinator.followTaskID(), "pr3")
+
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        scroll.contentSize = CGSize(width: 390, height: 1200)
+        scroll.contentOffset = CGPoint(x: 0, y: 297)
+        coordinator.lockOffsets(from: scroll)
+        XCTAssertTrue(coordinator.hasPinnedClaim())
+
+        coordinator.followHourPanChanged(windowY: beganWindowY)
+        XCTAssertTrue(storeWrites.isEmpty, "touch-down must not write 30")
+
+        coordinator.followHourPanChanged(windowY: fingerWindowY)
+        XCTAssertEqual(storeWrites.count, 1)
+        XCTAssertEqual(storeWrites[0].0, "pr3")
+        XCTAssertEqual(storeWrites[0].1, minutes, accuracy: 0.01)
+        XCTAssertGreaterThan(storeWrites[0].1, 30)
+        XCTAssertTrue(coordinator.hasPinnedClaim(), "pin holds through hour-pan .changed")
+
+        coordinator.dropClaim()
+        XCTAssertFalse(coordinator.hasPinnedClaim(), "dropClaim() unpins only")
+        XCTAssertEqual(storeWrites.count, 1, "dropClaim() must not write 30")
+        XCTAssertEqual(storeWrites[0].1, minutes, accuracy: 0.01)
+    }
+
+    func testTitleStaticTextIsDetailsNotDurationHandle() {
+        // `b8f1337`: StaticText `calendar.timed.*` `(87.3, 312.7, 122.7, 18)`
+        // must stay Details. Duration is only the 16pt handle below the title.
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        scroll.contentSize = CGSize(width: 390, height: 1200)
+        let card = UIView(frame: CGRect(x: 50, y: 308.7, width: 168, height: 39.3))
+        card.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("2860CA86")
+        scroll.addSubview(card)
+        let title = UIView(frame: CGRect(x: 37.3, y: 4, width: 122.7, height: 18))
+        title.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("2860CA86")
+        card.addSubview(title)
+        scroll.layoutIfNeeded()
+
+        let titlePoint = CGPoint(x: 87.3 + 61, y: 312.7 + 9)
+        XCTAssertEqual(
+            CalendarLayout.paintedCardHit(
+                from: title,
+                locationInScroll: titlePoint,
+                in: scroll
+            ),
+            .blockBody(taskID: "2860CA86"),
+            "title StaticText must open Details"
+        )
+        XCTAssertEqual(
+            CalendarLayout.paintedCardHit(
+                from: card,
+                locationInScroll: CGPoint(x: 134, y: 333.3),
+                in: scroll
+            ),
+            .capsule(taskID: "2860CA86"),
+            "16pt handle below the title is duration"
+        )
+    }
+
+    func testPaintedBlockFrameHandleIgnoresLaggedOtherUIView() {
+        // `aff9919`: Other / a11y frames lag painted pixels (`.position()` /
+        // `.offset()`). Duration starts from `blockFrame` bottom 16pt, not
+        // the Other UIView. Title StaticText stays Details.
+        let hourH: CGFloat = 50
+        let placed = CalendarLayout.placeTimed(
+            [event(id: "pr3", time: "12:00", duration: 30)],
+            pixelsPerHour: 50
+        )[0]
+        let frame = CalendarLayout.blockFrame(event: placed, columnWidth: 220)
+        XCTAssertEqual(frame.minY, 12 * hourH, accuracy: 0.01)
+        XCTAssertGreaterThanOrEqual(frame.height, 36)
+        let handleY = frame.maxY - 8
+        let columns = [
+            CalendarLayout.HourCanvasColumn(dayISO: "2026-09-19", events: [placed])
+        ]
+        guard let handle = CalendarLayout.paintedBlockFrameHandle(
+            contentPoint: CGPoint(x: frame.midX, y: handleY),
+            columns: columns,
+            columnWidth: 220
+        ) else {
+            return XCTFail("painted blockFrame bottom 16pt must be the handle")
+        }
+        XCTAssertEqual(handle.taskID, "pr3")
+        XCTAssertEqual(handle.duration, 30, accuracy: 0.01)
+        XCTAssertNil(
+            CalendarLayout.paintedBlockFrameHandle(
+                contentPoint: CGPoint(x: frame.midX, y: frame.minY + 8),
+                columns: columns,
+                columnWidth: 220
+            ),
+            "title / card body is not the handle"
+        )
+        XCTAssertNil(
+            CalendarLayout.paintedBlockFrameHandle(
+                contentPoint: CGPoint(x: frame.midX, y: 8 * hourH + 8),
+                columns: columns,
+                columnWidth: 220
+            ),
+            "empty hour stays timed create"
+        )
+
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        scroll.contentSize = CGSize(width: 390, height: 24 * hourH)
+        let grid = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 24 * hourH))
+        scroll.addSubview(grid)
+        let lagged = UIView(
+            frame: frame.offsetBy(dx: 0, dy: -11)
+        )
+        lagged.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        grid.addSubview(lagged)
+        let title = UIView(frame: CGRect(x: 37.3, y: 4, width: 122.7, height: 18))
+        title.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        lagged.addSubview(title)
+        scroll.layoutIfNeeded()
+
+        let handleInScroll = CGPoint(x: frame.midX, y: handleY)
+        XCTAssertNil(
+            CalendarLayout.paintedOtherHandleHit(locationInScroll: handleInScroll, in: scroll),
+            "lagged Other must not be the handle source"
+        )
+
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { columns },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: 50,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { _, _ in },
+            onEnded: { _, _ in },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        guard case .capsule(let target) = coordinator.canvasHit(
+            in: scroll,
+            locationInScroll: handleInScroll
+        ) else {
+            return XCTFail("canvasHit must start a session from painted blockFrame")
+        }
+        XCTAssertEqual(target.taskID, "pr3")
+
+        XCTAssertEqual(
+            coordinator.canvasHit(
+                in: scroll,
+                locationInScroll: title.convert(CGPoint(x: 61, y: 9), to: scroll)
+            ),
+            .blockBody(taskID: "pr3"),
+            "title StaticText tap stays Details"
+        )
+        guard case .emptyHour = coordinator.canvasHit(
+            in: scroll,
+            locationInScroll: CGPoint(x: frame.midX, y: 8 * hourH + 8)
+        ) else {
+            return XCTFail("empty hour stays timed create")
+        }
+    }
+
+    func testWindowHandleHitStartsDurationSessionNotTitle() {
+        // `dd62490`: claim pinned hours with no task.id so setDuration no-op'd.
+        // Other bottom 16pt `calendar.capsule.*` starts the session.
+        let host = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 800))
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        scroll.contentSize = CGSize(width: 390, height: 1200)
+        host.addSubview(scroll)
+        let card = UIView(frame: CGRect(x: 50, y: 284, width: 168, height: 39.3))
+        card.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        scroll.addSubview(card)
+        let title = UIView(frame: CGRect(x: 37.3, y: 4, width: 122.7, height: 18))
+        title.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        card.addSubview(title)
+        let handle = UIView(frame: CGRect(x: 0, y: 39.3 - 16, width: 168, height: 16))
+        handle.accessibilityIdentifier = CalendarLayout.timedCapsuleAccessibilityID("pr3")
+        card.addSubview(handle)
+        host.layoutIfNeeded()
+
+        let handleWindow = handle.convert(CGPoint(x: 84, y: 8), to: host)
+        XCTAssertEqual(
+            CalendarLayout.handleTaskID(windowPoint: handleWindow, in: scroll, window: host),
+            "pr3"
+        )
+        let titleWindow = title.convert(CGPoint(x: 61, y: 9), to: host)
+        XCTAssertNil(
+            CalendarLayout.handleTaskID(windowPoint: titleWindow, in: scroll, window: host),
+            "title StaticText must not start a duration session"
+        )
+
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { [] },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: 50,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { _, _ in },
+            onEnded: { _, _ in },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        XCTAssertNil(coordinator.followTaskID())
+        coordinator.beginDurationSession(taskID: "pr3")
+        XCTAssertEqual(coordinator.followTaskID(), "pr3")
+    }
+
+    func testCapsulePanTranslationGrowsBlockPastThirtyMinutes() {
+        // Window location.y 50pt at 50px/hour: 30 min → 90 min end instant.
+        // Painted height must exceed the 39pt 30-min capsule card.
+        let preview = CalendarLayout.durationFromLocationDelta(
+            start: 30,
+            locationDeltaY: 50,
+            pixelsPerHour: 50
+        )
+        XCTAssertEqual(preview, 90, accuracy: 0.01)
+        XCTAssertGreaterThan(preview, 30)
+        XCTAssertEqual(CalendarLayout.snapDuration(preview, snap: 15), 90)
+        XCTAssertGreaterThan(
+            CalendarLayout.blockFrameHeight(duration: preview, y: 9 * 50, pixelsPerHour: 50),
+            39
+        )
+        let chrome = HomeChrome()
+        chrome.pixelsPerHour = 50
+        chrome.snapInterval = 15
+        chrome.beginDurationResize(taskID: "pr3", duration: 30)
+        chrome.moveDurationResize(deltaY: 50, pixelsPerHour: 50)
+        let result = chrome.finishDurationResize()
+        XCTAssertEqual(result?.duration, 90)
+        XCTAssertGreaterThan(result?.duration ?? 0, 30)
+        XCTAssertGreaterThan(
+            CalendarLayout.blockFrameHeight(duration: result?.duration ?? 0, y: 9 * 50, pixelsPerHour: 50),
+            39
+        )
+    }
+
+    func testHitTestFindsCardPlacedAtBlockFrameOrigin() {
+        // `Layout.place` a card-sized child at blockFrame.origin. Parent
+        // height is the block bottom, not the canvas.
+        let hourH: CGFloat = 50
+        let placed = CalendarLayout.placeTimed(
+            [event(id: "pr3", time: "08:00", duration: 30)],
+            pixelsPerHour: 50
+        )[0]
+        let frame = CalendarLayout.blockFrame(event: placed, columnWidth: 220)
+        XCTAssertEqual(frame.minY, 8 * hourH, accuracy: 0.01)
+        XCTAssertEqual(frame.height, 36, accuracy: 0.01)
+        XCTAssertLessThan(frame.maxY, 24 * hourH - 8)
+
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 220, height: 400))
+        let canvas = UIView(frame: CGRect(x: 0, y: 0, width: 220, height: 24 * hourH))
+        scroll.addSubview(canvas)
+        scroll.contentSize = canvas.bounds.size
+        let grid = UIView(frame: canvas.bounds)
+        canvas.addSubview(grid)
+
+        let parent = UIView(frame: CGRect(x: 0, y: 0, width: frame.maxX, height: frame.maxY))
+        canvas.addSubview(parent)
+        let card = UIView(frame: frame)
+        card.accessibilityIdentifier = CalendarLayout.timedCardAccessibilityID("pr3")
+        parent.addSubview(card)
+        let capsule = UIView(frame: CGRect(x: 0, y: frame.height - 16, width: frame.width, height: 16))
+        capsule.accessibilityIdentifier = CalendarLayout.timedCapsuleAccessibilityID("pr3")
+        card.addSubview(capsule)
+        scroll.layoutIfNeeded()
+
+        XCTAssertFalse(CalendarLayout.isHourCanvasHost(card, scroll: scroll))
+        XCTAssertTrue(CalendarLayout.isPaintedCardSized(card, scroll: scroll))
+
+        func hit(_ canvasPoint: CGPoint) -> CalendarLayout.PaintedCardHit? {
+            let inScroll = canvas.convert(canvasPoint, to: scroll)
+            let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: inScroll)
+            return CalendarLayout.paintedCardHit(
+                from: view,
+                locationInScroll: inScroll,
+                in: scroll
+            )
+        }
+
+        XCTAssertEqual(hit(CGPoint(x: frame.midX, y: frame.minY + 8)), .blockBody(taskID: "pr3"))
+        XCTAssertEqual(hit(CGPoint(x: frame.midX, y: frame.maxY - 4)), .capsule(taskID: "pr3"))
+        XCTAssertNil(hit(CGPoint(x: 100, y: 4 * hourH + 10)))
     }
 
     private func event(id: String = "timed", time: String, duration: Double) -> TaskSnapshot {

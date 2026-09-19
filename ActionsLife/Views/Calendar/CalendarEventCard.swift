@@ -6,6 +6,7 @@ struct CalendarEventCard: View {
     var compact: Bool = false
     var onToggle: () -> Void
     var onOpen: () -> Void
+    var onToggleChild: (String) -> Void = { _ in }
     var onDrop: (HomeChrome.DropTarget) -> Void
     @Environment(HomeChrome.self) private var chrome
 
@@ -27,7 +28,10 @@ struct CalendarEventCard: View {
                     .lineLimit(compact ? 1 : 3)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
-                    .onTapGesture(perform: onOpen)
+                    .onTapGesture {
+                        guard chrome.durationResize == nil, chrome.drag == nil else { return }
+                        onOpen()
+                    }
 
                 if !children.isEmpty {
                     Text("\(children.filter(\.isDone).count)/\(children.count)")
@@ -36,19 +40,33 @@ struct CalendarEventCard: View {
                 }
             }
 
+            if !compact, !task.notes.isEmpty {
+                Text(task.notes)
+                    .font(.caption)
+                    .foregroundStyle(Theme.secondaryInk)
+                    .lineLimit(4)
+            }
+
             if !compact {
                 ForEach(children.prefix(6)) { child in
-                    HStack(spacing: 6) {
-                        Image(systemName: child.isDone ? "checkmark.circle.fill" : "circle")
-                            .font(.subheadline)
-                            .foregroundStyle(child.isDone ? Theme.accent : Theme.ink.opacity(0.45))
-                        Text(child.name.isEmpty ? "Untitled" : child.name)
-                            .font(.subheadline)
-                            .strikethrough(child.isDone)
-                            .foregroundStyle(Theme.ink)
-                            .lineLimit(1)
+                    Button {
+                        onToggleChild(child.id)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: child.isDone ? "checkmark.circle.fill" : "circle")
+                                .font(.subheadline)
+                                .foregroundStyle(child.isDone ? Theme.accent : Theme.ink.opacity(0.45))
+                            Text(child.name.isEmpty ? "Untitled" : child.name)
+                                .font(.subheadline)
+                                .strikethrough(child.isDone)
+                                .foregroundStyle(Theme.ink)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
                     }
+                    .buttonStyle(.plain)
                     .padding(.leading, 22)
+                    .accessibilityLabel(child.isDone ? "Mark \(child.name) not done" : "Mark \(child.name) done")
                 }
             }
         }
@@ -72,5 +90,56 @@ struct CalendarEventCard: View {
         }
         .background { DropZoneReporter(kind: .nest(task.id)) }
         .taskDragLift(id: task.id, name: task.name, duration: task.duration, fromCalendar: true, onDrop: onDrop)
+        .contentShape(Rectangle())
+        .accessibilityIdentifier(
+            compact
+                ? "calendar.allday.\(task.id)"
+                : CalendarLayout.timedCardAccessibilityID(task.id)
+        )
+        .onTapGesture {
+            // `e2fba41`/`c7a355e` Details path: SwiftUI tap on the painted card.
+            guard !compact, chrome.durationResize == nil, chrome.drag == nil else { return }
+            onOpen()
+        }
+        .overlay(alignment: .bottom) {
+            if !compact {
+                DurationEdgeHandle(task: task)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: HomeChrome.durationCapsuleHit)
+                    .contentShape(Rectangle())
+                    .accessibilityIdentifier(CalendarLayout.timedCapsuleAccessibilityID(task.id))
+            }
+        }
+    }
+}
+
+/// Painted 16pt capsule on the card (`c7a355e`). Duration pan lives on the
+/// hour scroller against this rect — not a UIViewRepresentable behind paint.
+struct DurationEdgeHandle: View {
+    let task: TaskSnapshot
+    @Environment(HomeChrome.self) private var chrome
+
+    var body: some View {
+        Color.primary.opacity(0.001)
+            .frame(maxWidth: .infinity)
+            .frame(height: HomeChrome.durationCapsuleHit)
+            .overlay(alignment: .bottom) {
+                VStack(spacing: 4) {
+                    if chrome.durationResize?.taskID == task.id {
+                        Rectangle()
+                            .fill(Theme.dragPreview.opacity(0.85))
+                            .frame(height: 1)
+                    }
+                    Capsule()
+                        .fill(Theme.handle)
+                        .frame(width: 22, height: 3)
+                        .padding(.bottom, 4)
+                }
+                .allowsHitTesting(false)
+            }
+            .contentShape(Rectangle())
+            .accessibilityIdentifier(CalendarLayout.timedCapsuleAccessibilityID(task.id))
+            .accessibilityValue(task.id)
+            .accessibilityLabel("Resize duration")
     }
 }

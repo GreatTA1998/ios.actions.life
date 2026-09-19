@@ -19,6 +19,11 @@ final class HomeChrome {
     static let edgeStep: CGFloat = 16
     static let splitHandle: CGFloat = 36
     static let splitMinPane: CGFloat = 48
+    /// Bottom edge reserved so a lift does not start on the duration handle.
+    static let durationHandleHit: CGFloat = 28
+    /// Painted gray capsule / duration-pan target. Keep this off the title so
+    /// a card-body tap still opens Details (`b45eccd` bottom-half ate the tap).
+    static let durationCapsuleHit: CGFloat = 16
 
     var isResizing = false
     var isLifting = false
@@ -26,6 +31,8 @@ final class HomeChrome {
     var snapInterval = 15
     var zones: [DropZone] = []
     var drag: DragSession?
+    /// Live duration while dragging the calendar block's bottom edge (web `DurationAdjuster`).
+    var durationResize: DurationResizeSession?
 
     /// Global frames of the calendar / list panes (for clipping + edge scroll).
     var calendarPane: CGRect = .null
@@ -76,6 +83,8 @@ final class HomeChrome {
     /// Bumped every edge-scroll tick so bridges re-apply a steady delta.
     var edgeScrollGeneration: Int = 0
 
+    /// Duration resize is excluded: flipping `scrollDisabled` mid-pan rebuilds the
+    /// calendar UIScrollView and cancels the handle gesture (height never changes).
     var pointerCaptured: Bool { isResizing || isLifting || drag != nil }
 
     struct DropZone: Equatable {
@@ -109,6 +118,12 @@ final class HomeChrome {
         case nest(String)
         case allDay(String)
         case timed(dayISO: String, minutes: Int)
+    }
+
+    struct DurationResizeSession: Equatable {
+        var taskID: String
+        var startDuration: Double
+        var previewDuration: Double
     }
 
     var ghostTop: CGPoint {
@@ -179,6 +194,35 @@ final class HomeChrome {
         listScrollDelta = .zero
         edgeScrollDriver.setActive(false)
         drag = nil
+    }
+
+    func beginDurationResize(taskID: String, duration: Double) {
+        cancelDrag()
+        durationResize = DurationResizeSession(
+            taskID: taskID,
+            startDuration: duration,
+            previewDuration: duration
+        )
+    }
+
+    func moveDurationResize(deltaY: CGFloat, pixelsPerHour: Double? = nil) {
+        guard var session = durationResize else { return }
+        session.previewDuration = CalendarLayout.durationFromLocationDelta(
+            start: session.startDuration,
+            locationDeltaY: deltaY,
+            pixelsPerHour: pixelsPerHour ?? self.pixelsPerHour
+        )
+        durationResize = session
+    }
+
+    func finishDurationResize() -> (taskID: String, duration: Double)? {
+        guard let session = durationResize else { return nil }
+        durationResize = nil
+        return (session.taskID, CalendarLayout.snapDuration(session.previewDuration, snap: snapInterval))
+    }
+
+    func cancelDurationResize() {
+        durationResize = nil
     }
 
     func updateEdgeScroll(finger: CGPoint) {

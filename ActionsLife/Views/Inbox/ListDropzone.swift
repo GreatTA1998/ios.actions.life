@@ -5,6 +5,12 @@ struct ComposerSlot: Equatable {
     var index: Int
 }
 
+/// Web `DayColumn` / `DayHeader` empty-space create (not on the inbox list).
+enum CalendarComposer: Equatable {
+    case timed(dayISO: String, minutes: Int)
+    case allDay(dayISO: String)
+}
+
 /// Web `Dropzone.svelte` / Expo `Dropzone.tsx`: tappable gap between tasks.
 /// Root 24px / sub 16px; trailing ghost zones overhang the next row like web `ghost-negative`.
 struct ListDropzone: View {

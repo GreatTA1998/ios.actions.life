@@ -99,6 +99,9 @@ final class TaskTreeStore {
             rootID: rootID
         )
         context.insert(record)
+        if !startDateISO.isEmpty {
+            lastScheduledISO = startDateISO
+        }
 
         if !parentID.isEmpty, !startDateISO.isEmpty {
             applySnapshotsAfter { docs in

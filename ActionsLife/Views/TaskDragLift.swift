@@ -36,7 +36,9 @@ struct TaskDragLift: ViewModifier {
             }
             .background {
                 HoldThenDragBridge(
-                    enabled: !chrome.isResizing && (chrome.drag == nil || chrome.drag?.taskID == taskID),
+                    enabled: !chrome.isResizing
+                        && chrome.durationResize == nil
+                        && (chrome.drag == nil || chrome.drag?.taskID == taskID),
                     holdDelay: HomeChrome.holdDelay,
                     slop: HomeChrome.touchSlop,
                     rowFrame: frame,
@@ -353,6 +355,96 @@ final class EdgeScrollDriver: NSObject {
     }
 }
 
+/// Jumps the **hour** UIScrollView to `now − 48pt` (web `jumpToToday` y).
+///
+/// Y only, and only the nearest vertical ancestor. `b956880` wrote
+/// `todayIndex × columnWidth` onto a 2-axis (or parent) scroller and shoved
+/// Today/hours/list to x≈3070.
+struct ScrollToYBridge: UIViewRepresentable {
+    var y: CGFloat
+    var generation: Int
+
+    func makeUIView(context: Context) -> BridgeView {
+        let view = BridgeView()
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        return view
+    }
+
+    func updateUIView(_ uiView: BridgeView, context: Context) {
+        uiView.targetY = y
+        uiView.apply(generation: generation)
+    }
+
+    final class BridgeView: UIView {
+        var targetY: CGFloat = 0
+        private var startedGeneration = -1
+        private var token = 0
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if window != nil, startedGeneration == -1 {
+                apply(generation: 0)
+            }
+        }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            if startedGeneration == -1 {
+                apply(generation: 0)
+            }
+        }
+
+        func apply(generation: Int) {
+            guard generation != startedGeneration else { return }
+            startedGeneration = generation
+            token += 1
+            attempt(token: token, remaining: 24)
+        }
+
+        private func attempt(token: Int, remaining: Int) {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, token == self.token else { return }
+                if let scroll = self.nearestVerticalScrollView() {
+                    self.applyY(to: scroll)
+                }
+                if remaining > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
+                        self?.attempt(token: token, remaining: remaining - 1)
+                    }
+                }
+            }
+        }
+
+        private func applyY(to scroll: UIScrollView) {
+            let maxY = max(0, scroll.contentSize.height - scroll.bounds.height)
+            let nextY = min(maxY, max(0, targetY))
+            guard abs(scroll.contentOffset.y - nextY) > 0.5 else { return }
+            scroll.setContentOffset(
+                CGPoint(x: scroll.contentOffset.x, y: nextY),
+                animated: false
+            )
+        }
+
+        /// First ancestor that actually scrolls vertically. Never write X.
+        /// Never walk into a parent just because it is also a UIScrollView.
+        private func nearestVerticalScrollView() -> UIScrollView? {
+            var view: UIView? = superview
+            while let current = view {
+                if let scroll = current as? UIScrollView,
+                   scroll.bounds.height > 0,
+                   scroll.contentSize.height > scroll.bounds.height + 1,
+                   scroll.contentSize.height > targetY + 20
+                {
+                    return scroll
+                }
+                view = current.superview
+            }
+            return nil
+        }
+    }
+}
+
 /// UIKit split-handle pan. Mirrors Expo SplitPane: always clear dragging on
 /// release **and** terminate — SwiftUI DragGesture often skips `onEnded` when
 /// the VStack rebuilds mid-drag, which used to leave `isResizing` stuck and
@@ -608,6 +700,12 @@ struct HoldThenDragBridge: UIViewRepresentable {
                 view = current.superview
             }
         }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard let view = gestureRecognizer.view else { return true }
+            let y = touch.location(in: view).y
+            return y <= view.bounds.height - HomeChrome.durationHandleHit
+        }
     }
 
     final class InstallerView: UIView {
@@ -684,6 +782,1136 @@ struct HoldThenDragBridge: UIViewRepresentable {
             return window
         }
 
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            nil
+        }
+    }
+}
+
+/// Hour `UIScrollView` otherwise delays subview touches. Do **not** pin
+/// `canCancelContentTouches = false` here — that stayed after the capsule
+/// pan and froze hours (`b69d3c0`). The duration pan sets it only while
+/// tracking. Do **not** set `isScrollEnabled = false`. `hitTest` is nil.
+struct HourScrollTouchBridge: UIViewRepresentable {
+    func makeUIView(context: Context) -> BridgeView {
+        let view = BridgeView()
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        return view
+    }
+
+    func updateUIView(_ uiView: BridgeView, context: Context) {
+        uiView.apply()
+    }
+
+    final class BridgeView: UIView {
+        private var token = 0
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            apply()
+        }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            apply()
+        }
+
+        func apply() {
+            if configureHourScroller() { return }
+            token += 1
+            let current = token
+            DispatchQueue.main.async { [weak self] in
+                guard let self, current == self.token else { return }
+                self.retry(token: current, remaining: 24)
+            }
+        }
+
+        private func retry(token: Int, remaining: Int) {
+            guard token == self.token else { return }
+            if configureHourScroller() { return }
+            guard remaining > 0 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
+                self?.retry(token: token, remaining: remaining - 1)
+            }
+        }
+
+        @discardableResult
+        private func configureHourScroller() -> Bool {
+            var current: UIView? = superview
+            while let node = current {
+                if let scroll = node as? UIScrollView,
+                   scroll.bounds.height > 0,
+                   scroll.contentSize.height > scroll.bounds.height + 1
+                {
+                    scroll.delaysContentTouches = false
+                    return true
+                }
+                current = node.superview
+            }
+            return false
+        }
+
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            nil
+        }
+    }
+}
+
+/// Tap + duration pan on the hour `UIScrollView`. Empty-hour (nil `hitTest` /
+/// hour grid) stays timed create (`6b5a0c4` / `0884a7e`). Painted card body
+/// `hitTest` → Details. Painted 16pt capsule `hitTest` → `setDuration`.
+/// `canCancelContentTouches = false` only while the capsule pan tracks.
+/// Never `isScrollEnabled = false`. No TapView/HandleView. No `TimedCardLayout.place`.
+struct HourDurationPanBridge: UIViewRepresentable {
+    var enabled: Bool
+    var liveColumns: () -> [CalendarLayout.HourCanvasColumn]
+    var headerHeight: CGFloat
+    var columnWidth: CGFloat
+    var pixelsPerHour: Double
+    var snap: Int
+    /// Live store — handle follow calls `setDuration` on this instance.
+    var treeStore: TaskTreeStore? = nil
+    var onTimedCreate: (_ dayISO: String, _ minutes: Int) -> Void
+    var onOpenDetails: (_ taskID: String) -> Void
+    var onBegan: (CalendarLayout.DurationCapsuleTarget) -> Void
+    /// Same API Details uses for “30 minutes”: `setDuration(taskID, minutes:)`.
+    var onChanged: (_ taskID: String, _ minutes: Double) -> Void
+    var onEnded: (_ taskID: String, _ minutes: Double) -> Void
+    var onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIView(context: Context) -> InstallerView {
+        let view = InstallerView()
+        view.coordinator = context.coordinator
+        return view
+    }
+
+    func updateUIView(_ uiView: InstallerView, context: Context) {
+        context.coordinator.parent = self
+        // Bind `TaskTreeStore.setDuration` on this MainActor view path so
+        // handle `touchesMoved` / display-link can call that method — the
+        // unit-test `followWindowY` hook is not the XCUI path (`82619a9`).
+        if let store = treeStore {
+            context.coordinator.installLiveSetDuration { id, minutes in
+                store.setDuration(id, minutes: minutes)
+            }
+        }
+        context.coordinator.bindStoreWrites(from: self)
+        if !context.coordinator.dragging {
+            context.coordinator.pan.isEnabled = enabled
+            context.coordinator.tap.isEnabled = enabled
+        }
+        uiView.coordinator = context.coordinator
+        uiView.ensureInstalled()
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: HourDurationPanBridge
+        let pan = DurationPanRecognizer()
+        let tap = UITapGestureRecognizer()
+        private(set) var dragging = false
+        private var lockedOffsets: [(UIScrollView, CGPoint)] = []
+        private var savedCancelContentTouches: [(UIScrollView, Bool)] = []
+        private var pendingHit: CalendarLayout.DurationCapsuleTarget?
+        private var claimedTarget: CalendarLayout.DurationCapsuleTarget?
+        /// Copied at install so `touchesMoved` does not go through a stale
+        /// `parent` or a pan that never `.changed` (`074335c` byte-identical).
+        var writeDuration: ((_ taskID: String, _ minutes: Double) -> Void)?
+        var commitDuration: ((_ taskID: String, _ minutes: Double) -> Void)?
+        fileprivate var capturedTaskID: String?
+        private var capturedStartDuration: Double = 30
+        /// Live `TaskTreeStore` for handle follow writes (`82619a9`).
+        fileprivate weak var treeStore: TaskTreeStore?
+        /// `TaskTreeStore.setDuration` copied on the MainActor view path.
+        fileprivate var liveStoreSetDuration: ((_ taskID: String, _ minutes: Double) -> Void)?
+        private var beganWindowY: CGFloat?
+        /// Hour scroller the pan is installed on (`81ba98a` Details). Follow
+        /// the capsule `UITouch` in window space after `.began` — do **not**
+        /// put the pan on the window (`e728c7b` ate `calendar.timed.*` taps).
+        fileprivate weak var hourScroll: UIScrollView?
+        /// The capsule `UITouch` from `.began`. Sampled in window space
+        /// until `.ended` / `.cancelled`, even +80 pt below the 39pt card.
+        fileprivate weak var trackedTouch: UITouch?
+        private var followLink: CADisplayLink?
+        /// The claimed hour `UIScrollView` pan — the XCUI +80 pt path
+        /// (`00f3382` `touchesMoved` / display-link never ran).
+        private var observingHourPan = false
+        private weak var observedHourPan: UIPanGestureRecognizer?
+        /// `writeStoreDuration` → `restoreLockedOffsets` re-entry.
+        private var isWritingPinnedFollow = false
+        /// Unit hook for the pin-follow write (`fc366c5` lift never grew).
+        private var pinnedFollowWindowY: CGFloat?
+
+        init(parent: HourDurationPanBridge) {
+            self.parent = parent
+            super.init()
+            pan.owner = self
+            pan.delegate = self
+            bindStoreWrites(from: parent)
+            // False so a tap on empty hour / title still reaches the recognizers
+            // (`605f886` cancelled SpatialTap and create went all-day).
+            pan.cancelsTouchesInView = false
+            tap.addTarget(self, action: #selector(handleTap(_:)))
+            tap.delegate = self
+            tap.cancelsTouchesInView = true
+            tap.numberOfTapsRequired = 1
+        }
+
+        deinit {
+            stopFollowingTouch()
+            pan.view?.removeGestureRecognizer(pan)
+            tap.view?.removeGestureRecognizer(tap)
+            unlockOffsets()
+        }
+
+        @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+            guard parent.enabled, !dragging, let scroll = gesture.view as? UIScrollView else { return }
+            switch canvasHit(in: scroll, locationInScroll: gesture.location(in: scroll)) {
+            case .emptyHour(let dayISO, let minutes):
+                parent.onTimedCreate(dayISO, minutes)
+            case .blockBody(let taskID):
+                parent.onOpenDetails(taskID)
+            default:
+                break
+            }
+        }
+
+        func canvasHit(in scroll: UIScrollView, locationInScroll: CGPoint) -> CalendarLayout.HourCanvasHit? {
+            let hitView = CalendarLayout.hourScrollHitView(
+                in: scroll,
+                locationInScroll: locationInScroll
+            )
+            // Title StaticText stays Details (`b8f1337`). Do not use lagged
+            // Other UIView frames for the handle (`aff9919`).
+            if let titleID = CalendarLayout.titleStaticTextTaskID(from: hitView) {
+                return .blockBody(taskID: titleID)
+            }
+            let contentPoint = CalendarLayout.blockFramePoint(
+                locationInScroll: locationInScroll,
+                scroll: scroll,
+                headerHeight: parent.headerHeight
+            )
+            if let handle = CalendarLayout.paintedBlockFrameHandle(
+                contentPoint: contentPoint,
+                columns: parent.liveColumns(),
+                columnWidth: parent.columnWidth
+            ) {
+                return .capsule(handle)
+            }
+            if let painted = CalendarLayout.paintedCardHit(
+                from: hitView,
+                locationInScroll: locationInScroll,
+                in: scroll
+            ) {
+                switch painted {
+                case .blockBody(let taskID):
+                    return .blockBody(taskID: taskID)
+                case .capsule(let taskID):
+                    return .capsule(capsuleTarget(taskID: taskID))
+                }
+            }
+            // `6b5a0c4` empty-hour path — nil / hour-grid `hitTest`.
+            return CalendarLayout.hourCanvasHit(
+                contentPoint: contentPoint,
+                columns: parent.liveColumns(),
+                columnWidth: parent.columnWidth,
+                pixelsPerHour: parent.pixelsPerHour,
+                snap: parent.snap
+            )
+        }
+
+        func capsuleTarget(taskID: String) -> CalendarLayout.DurationCapsuleTarget {
+            for (index, column) in parent.liveColumns().enumerated() {
+                if let event = column.events.first(where: { $0.task.id == taskID }) {
+                    return CalendarLayout.DurationCapsuleTarget(
+                        taskID: taskID,
+                        duration: event.task.duration,
+                        rect: CalendarLayout.durationCapsuleRect(
+                            columnIndex: index,
+                            columnWidth: parent.columnWidth,
+                            event: event
+                        )
+                    )
+                }
+            }
+            return CalendarLayout.DurationCapsuleTarget(taskID: taskID, duration: 30, rect: .zero)
+        }
+
+        func bindStoreWrites(from parent: HourDurationPanBridge) {
+            writeDuration = parent.onChanged
+            commitDuration = parent.onEnded
+            treeStore = parent.treeStore
+        }
+
+        /// MainActor `updateUIView` installs the real store method so XCUI
+        /// handle `touchesMoved` does not depend on a stale `onChanged`.
+        func installLiveSetDuration(_ write: @escaping (_ taskID: String, _ minutes: Double) -> Void) {
+            liveStoreSetDuration = write
+        }
+
+        func refreshStoreWrites() {
+            bindStoreWrites(from: parent)
+        }
+
+        /// Handle follow must have a live `setDuration` (`81d22bb` pin-only).
+        func hasLiveSetDurationCallback() -> Bool {
+            liveStoreSetDuration != nil || writeDuration != nil
+        }
+
+        func hasLiveStoreSetDuration() -> Bool {
+            liveStoreSetDuration != nil
+        }
+
+        /// minutes = start + (windowY − beganWindowY) / paintedHourHeight * 60.
+        func minutesFromBegan(locationY: CGFloat) -> Double {
+            let began = beganWindowY ?? locationY
+            return CalendarLayout.paintedHandleMinutes(
+                start: capturedStartDuration,
+                windowDeltaY: locationY - began,
+                pixelsPerHour: parent.pixelsPerHour
+            )
+        }
+
+        /// `location(in: nil)` stays 0 (`9cd088e`). Always a real window.
+        func resolvedWindow(for touch: UITouch? = nil) -> UIWindow? {
+            if let window = touch?.window { return window }
+            if let window = hourScroll?.window { return window }
+            if let window = pan.view?.window { return window }
+            let windows = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap(\.windows)
+            return windows.first(where: \.isKeyWindow) ?? windows.first
+        }
+
+        /// Finger Y in `touch.window` (or the key window) — same space as
+        /// touch-down. Never `location(in: nil)`.
+        func windowY(of touch: UITouch) -> CGFloat? {
+            guard let window = resolvedWindow(for: touch) else { return nil }
+            return touch.location(in: window).y
+        }
+
+        func captureCapsule(from scroll: UIScrollView?, touch: UITouch) {
+            if let y = windowY(of: touch) {
+                beganWindowY = y
+            }
+            trackedTouch = touch
+            // 16pt handle only (`28ee931` tap path). Do not bind to the
+            // whole `calendar.timed.*` card / StaticText title.
+            startDurationSession(scroll: scroll, touch: touch)
+            attachHourPanFollow(to: scroll)
+            // Same ticker as the pin that keeps hours put. XCUI +80 may
+            // never hit handle `touchesEnded` (`fc366c5`).
+            if followTaskID() != nil {
+                beginFollowing(touch)
+            }
+        }
+
+        /// Same pin that holds hours: start the duration session so follow
+        /// has a `task.id` (`dd62490` pinned with no id → `setDuration` no-op).
+        func startDurationSession(scroll: UIScrollView?, touch: UITouch) {
+            if capturedTaskID != nil { return }
+            if let scroll {
+                let location = touch.location(in: scroll)
+                let contentPoint = CalendarLayout.blockFramePoint(
+                    locationInScroll: location,
+                    scroll: scroll,
+                    headerHeight: parent.headerHeight
+                )
+                if let handle = CalendarLayout.paintedBlockFrameHandle(
+                    contentPoint: contentPoint,
+                    columns: parent.liveColumns(),
+                    columnWidth: parent.columnWidth
+                ) {
+                    beginDurationSession(taskID: handle.taskID, duration: handle.duration)
+                    return
+                }
+            }
+            // `shouldReceive` already claimed the 16pt handle (`pendingHit`).
+            // Do not drop that id if `paintedCardHit` reports `.blockBody`.
+            if let hit = pendingHit ?? claimedTarget {
+                beginDurationSession(taskID: hit.taskID, duration: hit.duration)
+            }
+        }
+
+        func beginDurationSession(taskID: String, duration: Double? = nil) {
+            guard !taskID.isEmpty else { return }
+            capturedTaskID = taskID
+            capturedStartDuration = duration ?? capsuleTarget(taskID: taskID).duration
+            attachHourPanFollow(to: hourScroll)
+        }
+
+        /// 16pt claim (`pendingHit`) must become a session before the hour
+        /// pan `.changed` writes. Do not open Details / change `shouldReceive`.
+        func ensureHandleSessionFromClaim() {
+            if hasDurationSession() { return }
+            if let hit = pendingHit ?? claimedTarget {
+                beginDurationSession(taskID: hit.taskID, duration: hit.duration)
+            }
+        }
+
+        /// Claim/pin path: remember the 16pt handle `task.id` so the hour
+        /// scroller pan (the XCUI +80 pt drag) can `setDuration`.
+        func bindClaimedHandle(touch: UITouch?, target: CalendarLayout.DurationCapsuleTarget) {
+            if beganWindowY == nil, let touch, let y = windowY(of: touch) {
+                beganWindowY = y
+            }
+            if capturedTaskID == nil {
+                capturedTaskID = target.taskID
+                capturedStartDuration = target.duration
+            }
+        }
+
+        func bindClaimedHandleForTest(taskID: String, startDuration: Double, beganWindowY: CGFloat) {
+            capturedTaskID = taskID
+            capturedStartDuration = startDuration
+            self.beganWindowY = beganWindowY
+        }
+
+        /// 16pt claim only — no `capturedTaskID` yet. Hour-pan `.changed`
+        /// must start the session (`47d78b2`).
+        func claimSixteenPointHandleForTest(taskID: String, startDuration: Double, beganWindowY: CGFloat) {
+            let target = CalendarLayout.DurationCapsuleTarget(
+                taskID: taskID,
+                duration: startDuration,
+                rect: .zero
+            )
+            pendingHit = target
+            claimedTarget = target
+            self.beganWindowY = beganWindowY
+        }
+
+        /// Same write `hourScrollerPanFollowed` uses while the claim pins hours.
+        func followClaimedHourScroller(windowY: CGFloat, ended: Bool) {
+            writeStoreDuration(locationY: windowY, ended: ended)
+            restoreLockedOffsets()
+        }
+
+        /// Pin-follow tick: `setDuration` from window Y while hours stay,
+        /// before `dropClaim()`. `dropClaim()` still only unpins.
+        func followWhileHoursPinned(windowY: CGFloat) {
+            pinnedFollowWindowY = windowY
+            restoreLockedOffsets()
+            writeDurationFromPinnedFollow()
+            pinnedFollowWindowY = nil
+        }
+
+        /// XCUITest / unit hook: same path `touchesMoved` uses after the
+        /// finger leaves the 16pt capsule.
+        func startWindowFollow(taskID: String, startDuration: Double, beganWindowY: CGFloat) {
+            capturedTaskID = taskID
+            capturedStartDuration = startDuration
+            self.beganWindowY = beganWindowY
+        }
+
+        func followWindowY(_ windowY: CGFloat, ended: Bool) {
+            writeStoreDuration(locationY: windowY, ended: ended)
+        }
+
+        /// Follow-only: bind the painted card `task.id` from the handle
+        /// `UITouch` so `touchesMoved` can `setDuration` after leaving 16pt.
+        func bindFollowFromTouch(_ touch: UITouch) {
+            trackedTouch = touch
+            if beganWindowY == nil, let y = windowY(of: touch) {
+                beganWindowY = y
+            }
+            if followTaskID() != nil {
+                attachHourPanFollow(to: hourScroll)
+                return
+            }
+            guard let scroll = hourScroll else { return }
+            let location = touch.location(in: scroll)
+            let view = CalendarLayout.hourScrollHitView(in: scroll, locationInScroll: location)
+            if let painted = CalendarLayout.paintedCardHit(
+                from: view,
+                locationInScroll: location,
+                in: scroll
+            ), case .capsule(let taskID) = painted {
+                capturedTaskID = taskID
+                capturedStartDuration = capsuleTarget(taskID: taskID).duration
+                attachHourPanFollow(to: scroll)
+                return
+            }
+            if let hit = pendingHit ?? claimedTarget {
+                capturedTaskID = hit.taskID
+                capturedStartDuration = hit.duration
+                attachHourPanFollow(to: scroll)
+            }
+        }
+
+        /// Id already claimed by the 16pt handle — write path only.
+        func followTaskID() -> String? {
+            if let id = capturedTaskID, !id.isEmpty { return id }
+            if let id = pendingHit?.taskID, !id.isEmpty { return id }
+            if let id = claimedTarget?.taskID, !id.isEmpty { return id }
+            return nil
+        }
+
+        func hasDurationSession() -> Bool {
+            if let id = capturedTaskID, !id.isEmpty { return true }
+            return false
+        }
+
+        /// Follow the **existing** hour scroller pan (no second UIView).
+        /// That pan is what the XCUI +80 pt handle drag actually drives.
+        func attachHourPanFollow(to scroll: UIScrollView?) {
+            let scroll = scroll ?? hourScroll
+            guard let scroll else { return }
+            hourScroll = scroll
+            let hourPan = scroll.panGestureRecognizer
+            if observingHourPan, observedHourPan === hourPan { return }
+            detachHourPanFollow()
+            hourPan.addTarget(self, action: #selector(hourScrollerPanFollowed(_:)))
+            observedHourPan = hourPan
+            observingHourPan = true
+        }
+
+        func detachHourPanFollow() {
+            observedHourPan?.removeTarget(self, action: #selector(hourScrollerPanFollowed(_:)))
+            observedHourPan = nil
+            observingHourPan = false
+        }
+
+        /// Finger Y in the same window as touch-down. `location(in: nil)`
+        /// stays 0 (`9cd088e`); XCUI handle drag is 320 → 400.
+        func windowLocationY(of gesture: UIGestureRecognizer) -> CGFloat? {
+            guard let window = resolvedWindow() ?? gesture.view?.window else { return nil }
+            return gesture.location(in: window).y
+        }
+
+        /// Live XCUI hour-pan Y (`47d78b2`). Not `trackedTouch`, not
+        /// `location(in: nil)` — `recognizer.location(in: recognizer.view?.window)`.
+        func hourPanWindowY(of recognizer: UIGestureRecognizer) -> CGFloat? {
+            guard let window = recognizer.view?.window else { return nil }
+            return recognizer.location(in: window).y
+        }
+
+        func claimedHourPanWindowY() -> CGFloat? {
+            if let touch = trackedTouch, let y = windowY(of: touch) { return y }
+            guard let scroll = hourScroll else { return nil }
+            return windowLocationY(of: scroll.panGestureRecognizer)
+        }
+
+        /// Hour `UIPanGestureRecognizer` `.changed` write — the path that
+        /// actually pins `contentOffset` on the XCUI +80 drag (`47d78b2`).
+        func followHourPanChanged(windowY: CGFloat) {
+            restoreLockedOffsets()
+            guard followTaskID() != nil else { return }
+            guard let began = beganWindowY, abs(windowY - began) >= 1 else { return }
+            writeStoreDuration(locationY: windowY, ended: false)
+            restoreLockedOffsets()
+        }
+
+        func hasPinnedClaim() -> Bool {
+            !lockedOffsets.isEmpty
+        }
+
+        /// Lift path (`00f3382` unstick): write the last follow minutes, then
+        /// `dropClaim()` so the hour grid is not left pinned (`f1d5558`).
+        func finishClaimedHourPan(windowY: CGFloat) {
+            // Do not write `30 + 0` on lift (`location(in: nil)` / pinned
+            // translation). `dropClaim()` must not reset minutes to 30.
+            if let began = beganWindowY, abs(windowY - began) >= 1 {
+                followClaimedHourScroller(windowY: windowY, ended: true)
+            }
+            clearCapsuleCapture()
+            dropClaim()
+        }
+
+        /// Hour `UIPanGestureRecognizer` `.changed` pins `contentOffset`
+        /// (`47d78b2`). Write `setDuration` from that location, not the
+        /// lockOffsets display-link follow (that path did not run).
+        @objc func hourScrollerPanFollowed(_ gesture: UIGestureRecognizer) {
+            restoreLockedOffsets()
+            ensureHandleSessionFromClaim()
+            guard followTaskID() != nil else { return }
+            guard let y = hourPanWindowY(of: gesture) else {
+                restoreLockedOffsets()
+                return
+            }
+            switch gesture.state {
+            case .began:
+                if beganWindowY == nil { beganWindowY = y }
+                followHourPanChanged(windowY: y)
+            case .changed:
+                followHourPanChanged(windowY: y)
+            case .ended, .cancelled:
+                finishClaimedHourPan(windowY: y)
+            case .failed:
+                if gesture.numberOfTouches == 0 {
+                    finishClaimedHourPan(windowY: y)
+                } else {
+                    restoreLockedOffsets()
+                }
+            default:
+                restoreLockedOffsets()
+            }
+        }
+
+        func beginFollowing(_ touch: UITouch) {
+            trackedTouch = touch
+            guard followLink == nil else { return }
+            let link = CADisplayLink(target: self, selector: #selector(sampleTrackedTouch))
+            link.add(to: .main, forMode: .common)
+            followLink = link
+        }
+
+        /// The recognizer can die when the finger leaves the 16pt band
+        /// while the `UITouch` is still down (`28ee931` froze at 35 min).
+        func shouldKeepFollowing(_ touch: UITouch) -> Bool {
+            guard capturedTaskID != nil else { return false }
+            switch touch.phase {
+            case .began, .moved, .stationary:
+                return true
+            default:
+                return false
+            }
+        }
+
+        func stopFollowingTouch() {
+            followLink?.invalidate()
+            followLink = nil
+            trackedTouch = nil
+        }
+
+        /// Keep writing window Y if `touchesMoved` is skipped after the
+        /// finger leaves the 16pt handle. Same `UITouch`, window space.
+        @objc func sampleTrackedTouch() {
+            guard followTaskID() != nil, let y = currentFollowWindowY() else { return }
+            if let touch = trackedTouch, touch.phase == .ended {
+                writeStoreDuration(locationY: y, ended: true)
+                clearCapsuleCapture()
+                dropClaim()
+                return
+            }
+            // `.cancelled` is the handle-edge / recognizer death — the
+            // XCUI finger is still down +80 pt below the card. Do not
+            // commit or `dropClaim()` here (`28ee931` froze at 35 min).
+            followWhileHoursPinned(windowY: y)
+        }
+
+        /// Window Y from the handle `UITouch`, then the hour scroller pan
+        /// after the recognizer dies at the 16pt band.
+        func currentFollowWindowY() -> CGFloat? {
+            if let touch = trackedTouch, let y = windowY(of: touch) {
+                switch touch.phase {
+                case .began, .moved, .stationary, .ended:
+                    return y
+                default:
+                    break
+                }
+            }
+            if let scroll = hourScroll {
+                let pan = scroll.panGestureRecognizer
+                switch pan.state {
+                case .began, .changed:
+                    return windowLocationY(of: pan)
+                default:
+                    break
+                }
+            }
+            if let touch = trackedTouch {
+                return windowY(of: touch)
+            }
+            return nil
+        }
+
+        /// Live `TaskTreeStore.setDuration` from handle `touchesMoved` /
+        /// display-link only. Does not change claim / `shouldReceive` / install.
+        func writeStoreDuration(locationY: CGFloat, ended: Bool) {
+            refreshStoreWrites()
+            guard let taskID = followTaskID(), !taskID.isEmpty else { return }
+            if capturedTaskID == nil { capturedTaskID = taskID }
+            dragging = true
+            restoreLockedOffsets()
+            let live = minutesFromBegan(locationY: locationY)
+            // `location(in: nil)` delta is 0 → 30. Do not write that on lift
+            // (would reset a grown duration). `dropClaim()` does not write.
+            if ended, let began = beganWindowY, abs(locationY - began) < 1 {
+                return
+            }
+            let minutes = ended
+                ? CalendarLayout.snapDuration(live, snap: parent.snap)
+                : live
+            // XCUI +80 pt handle drag must hit `TaskTreeStore.setDuration`
+            // for this painted card id — not only the layout unit test.
+            let storeWrite = liveStoreSetDuration
+                ?? (ended ? commitDuration ?? parent.onEnded : writeDuration ?? parent.onChanged)
+            invokeStoreWrite(storeWrite, taskID: taskID, minutes: minutes)
+            if ended, liveStoreSetDuration != nil {
+                invokeStoreWrite(parent.onEnded, taskID: taskID, minutes: minutes)
+            }
+        }
+
+        private func invokeStoreWrite(
+            _ write: ((_ taskID: String, _ minutes: Double) -> Void)?,
+            taskID: String,
+            minutes: Double
+        ) {
+            guard let write else { return }
+            let id = taskID
+            let mins = minutes
+            let run = { write(id, mins) }
+            if Thread.isMainThread {
+                run()
+            } else {
+                DispatchQueue.main.sync(execute: run)
+            }
+        }
+
+        func applyLocationDelta(_ deltaY: CGFloat) {
+            let y = (beganWindowY ?? 0) + deltaY
+            writeStoreDuration(locationY: y, ended: false)
+        }
+
+        func durationPanEnded(deltaY: CGFloat) {
+            if capturedTaskID != nil {
+                let y = (beganWindowY ?? 0) + deltaY
+                writeStoreDuration(locationY: y, ended: true)
+            }
+            clearCapsuleCapture()
+            dropClaim()
+        }
+
+        func clearCapsuleCapture() {
+            dragging = false
+            pendingHit = nil
+            claimedTarget = nil
+            capturedTaskID = nil
+            beganWindowY = nil
+            stopFollowingTouch()
+            detachHourPanFollow()
+        }
+
+        func durationPanCancelled() {
+            let wasDragging = dragging
+            dragging = false
+            pendingHit = nil
+            claimedTarget = nil
+            capturedTaskID = nil
+            beganWindowY = nil
+            stopFollowingTouch()
+            detachHourPanFollow()
+            dropClaim()
+            if wasDragging {
+                parent.onCancel()
+            }
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            parent.enabled || dragging
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard parent.enabled || dragging else { return false }
+            let scroll = hourScroll ?? gestureRecognizer.view as? UIScrollView
+            guard let scroll else { return false }
+            let hit = canvasHit(in: scroll, locationInScroll: touch.location(in: scroll))
+            // Card body `calendar.timed.*` must reach Details (`e728c7b`
+            // window pan + capturedTaskID stole the tap). Never deny the
+            // tap because a capsule id is pending.
+            if gestureRecognizer === tap {
+                if dragging { return false }
+                switch hit {
+                case .emptyHour, .blockBody:
+                    return true
+                default:
+                    return false
+                }
+            }
+            if gestureRecognizer === pan {
+                if dragging { return true }
+                // Capsule / 16pt handle only — never the title StaticText
+                // (`b8f1337` card-wide claim ate Details).
+                if case .capsule(let target) = hit {
+                    pendingHit = target
+                    claimedTarget = target
+                    return true
+                }
+                pendingHit = nil
+                claimedTarget = nil
+                return false
+            }
+            return false
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+        ) -> Bool {
+            false
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldBeRequiredToFailBy other: UIGestureRecognizer
+        ) -> Bool {
+            false
+        }
+
+        func lockOffsets(from view: UIView?) {
+            guard lockedOffsets.isEmpty else { return }
+            var found: [(UIScrollView, CGPoint)] = []
+            var saved: [(UIScrollView, Bool)] = []
+            var current = view
+            while let node = current {
+                if let scroll = node as? UIScrollView {
+                    saved.append((scroll, scroll.canCancelContentTouches))
+                    scroll.canCancelContentTouches = false
+                    scroll.delaysContentTouches = false
+                    found.append((scroll, scroll.contentOffset))
+                }
+                current = node.superview
+            }
+            lockedOffsets = found
+            savedCancelContentTouches = saved
+            attachHourPanFollow(to: view as? UIScrollView ?? hourScroll)
+            // 16pt claim (`pendingHit`) must be a session before hour-pan
+            // `.changed` (`47d78b2` follow ran with no id).
+            ensureHandleSessionFromClaim()
+        }
+
+        func restoreLockedOffsets() {
+            for (scroll, offset) in lockedOffsets where scroll.contentOffset != offset {
+                scroll.setContentOffset(offset, animated: false)
+            }
+        }
+
+        /// `30 + (touch.window.y − began) / hourHeight * 60` for the
+        /// painted `calendar.timed.*` id. Skip delta < 1 (do not write 30).
+        func writeDurationFromPinnedFollow() {
+            guard !isWritingPinnedFollow else { return }
+            guard followTaskID() != nil else { return }
+            let y: CGFloat
+            if let override = pinnedFollowWindowY {
+                y = override
+            } else if let touch = trackedTouch, let touchY = windowY(of: touch) {
+                y = touchY
+            } else {
+                return
+            }
+            guard let began = beganWindowY, abs(y - began) >= 1 else { return }
+            isWritingPinnedFollow = true
+            writeStoreDuration(locationY: y, ended: false)
+            isWritingPinnedFollow = false
+        }
+
+        /// Unpin `contentOffset` and restore `canCancelContentTouches` so hours
+        /// can scroll again (`94e965c`). Never leave this lock after `.ended`
+        /// / `.cancelled`. Never `isScrollEnabled = false`.
+        func dropClaim() {
+            restoreLockedOffsets()
+            for (scroll, previous) in savedCancelContentTouches {
+                scroll.canCancelContentTouches = previous
+            }
+            savedCancelContentTouches = []
+            lockedOffsets = []
+        }
+
+        func unlockOffsets() {
+            dropClaim()
+        }
+    }
+
+    /// Writes `setDuration` from `touchesMoved` / `touchesEnded` using
+    /// window `location.y − began.y` and the capsule UIView’s `task.id`.
+    /// Delivery continues after the finger leaves the 16pt capsule.
+    final class DurationPanRecognizer: UIGestureRecognizer {
+        weak var owner: Coordinator?
+
+        override func reset() {
+            super.reset()
+        }
+
+        private func windowY(of touch: UITouch) -> CGFloat? {
+            owner?.windowY(of: touch)
+        }
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesBegan(touches, with: event)
+            guard touches.count == 1, let touch = touches.first else {
+                state = .failed
+                owner?.unlockOffsets()
+                return
+            }
+            let scroll = owner?.hourScroll
+            owner?.lockOffsets(from: scroll ?? view)
+            owner?.captureCapsule(from: scroll, touch: touch)
+            owner?.restoreLockedOffsets()
+            if owner?.capturedTaskID != nil {
+                // Stay recognized so `touchesEnded` still `dropClaim()`s
+                // (`f1d5558` `.failed` left the hour grid pinned).
+                state = .began
+            }
+        }
+
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesMoved(touches, with: event)
+            // Follow the capsule `UITouch` in window space — not handle-local.
+            // Must still run when the finger is +80 pt below the 39pt card.
+            let touch = owner?.trackedTouch
+                ?? touches.first(where: { $0 === owner?.trackedTouch })
+                ?? touches.first
+            guard let touch else { return }
+            owner?.restoreLockedOffsets()
+            deliverLiveFollow(from: touch, ended: false)
+            owner?.restoreLockedOffsets()
+        }
+
+        /// Same method `touchesMoved` uses after the finger leaves 16pt.
+        /// Calls `TaskTreeStore.setDuration` via the MainActor-bound write.
+        func deliverLiveFollow(from touch: UITouch, ended: Bool) {
+            owner?.bindFollowFromTouch(touch)
+            if owner?.followTaskID() != nil {
+                if state == .possible {
+                    state = .began
+                }
+                if !ended, state == .began || state == .changed {
+                    state = .changed
+                }
+            }
+            if let y = windowY(of: touch) {
+                owner?.followWindowY(y, ended: ended)
+            }
+        }
+
+        /// XCUI / unit hook for the recognizer follow path (not layout math).
+        func performLiveWindowFollow(windowY: CGFloat, ended: Bool) {
+            owner?.followWindowY(windowY, ended: ended)
+        }
+
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+            // Live XCUI claim path (hours stay → dropClaim on lift):
+            // shouldReceive → lockOffsets → captureCapsule → here.
+            // Write `touch.location(in: touch.window)` vs touch-down Y —
+            // not the pinned hour-pan location (`099543c` delta 0).
+            let touch = owner?.trackedTouch ?? touches.first
+            if let touch, let y = windowY(of: touch) {
+                owner?.followClaimedHourScroller(windowY: y, ended: true)
+            }
+            owner?.clearCapsuleCapture()
+            owner?.dropClaim()
+            cancelsTouchesInView = false
+            if state == .began || state == .changed {
+                state = .ended
+            } else {
+                state = .failed
+            }
+            super.touchesEnded(touches, with: event)
+            owner?.unlockOffsets()
+        }
+
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+            let touch = owner?.trackedTouch ?? touches.first
+            // Recognizer cancelled at the handle edge; the finger may still
+            // be down. Keep sampling window Y → setDuration until the
+            // UITouch actually ends (`28ee931` committed 35 min here).
+            if let touch, owner?.shouldKeepFollowing(touch) == true {
+                if let y = windowY(of: touch) {
+                    owner?.followWindowY(y, ended: false)
+                }
+                state = .cancelled
+                super.touchesCancelled(touches, with: event)
+                return
+            }
+            if let touch, let y = windowY(of: touch), owner?.followTaskID() != nil {
+                owner?.followClaimedHourScroller(windowY: y, ended: true)
+            }
+            owner?.clearCapsuleCapture()
+            owner?.dropClaim()
+            cancelsTouchesInView = false
+            state = .cancelled
+            super.touchesCancelled(touches, with: event)
+            owner?.unlockOffsets()
+        }
+
+        override func canPrevent(_ other: UIGestureRecognizer) -> Bool {
+            owner?.dragging == true
+        }
+
+        override func canBePrevented(by other: UIGestureRecognizer) -> Bool {
+            owner?.dragging != true
+        }
+
+        override func shouldBeRequiredToFail(by other: UIGestureRecognizer) -> Bool {
+            false
+        }
+    }
+
+    final class InstallerView: UIView {
+        weak var coordinator: Coordinator?
+        private weak var installedOn: UIScrollView?
+        private var installToken = 0
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            ensureInstalled()
+        }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            ensureInstalled()
+        }
+
+        func ensureInstalled() {
+            guard let coordinator else { return }
+            if let scroll = nearestVerticalScrollView() {
+                attach(coordinator, to: scroll)
+                return
+            }
+            installToken += 1
+            let token = installToken
+            DispatchQueue.main.async { [weak self] in
+                guard let self, token == self.installToken else { return }
+                self.retryInstall(token: token, remaining: 24)
+            }
+        }
+
+        private func retryInstall(token: Int, remaining: Int) {
+            guard token == installToken else { return }
+            if let coordinator, let scroll = nearestVerticalScrollView() {
+                attach(coordinator, to: scroll)
+                return
+            }
+            guard remaining > 0 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
+                self?.retryInstall(token: token, remaining: remaining - 1)
+            }
+        }
+
+        private func attach(_ coordinator: Coordinator, to scroll: UIScrollView) {
+            let pan = coordinator.pan
+            let tap = coordinator.tap
+            coordinator.hourScroll = scroll
+            // Pan + tap on the hour scroller (`81ba98a` Details). Follow the
+            // capsule UITouch in window space after `.began` — do not attach
+            // the pan to the window (`e728c7b` ate `calendar.timed.*` taps).
+            if installedOn !== scroll || pan.view !== scroll {
+                pan.view?.removeGestureRecognizer(pan)
+                tap.view?.removeGestureRecognizer(tap)
+                scroll.addGestureRecognizer(pan)
+                scroll.addGestureRecognizer(tap)
+                installedOn = scroll
+            }
+            tap.require(toFail: pan)
+            scroll.panGestureRecognizer.require(toFail: pan)
+            scroll.delaysContentTouches = false
+            coordinator.bindStoreWrites(from: coordinator.parent)
+            isUserInteractionEnabled = false
+        }
+
+        private func nearestVerticalScrollView() -> UIScrollView? {
+            var view: UIView? = superview
+            while let current = view {
+                if let scroll = current as? UIScrollView,
+                   scroll.bounds.height > 0,
+                   scroll.contentSize.height > scroll.bounds.height + 1
+                {
+                    return scroll
+                }
+                view = current.superview
+            }
+            return nil
+        }
+
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            nil
+        }
+    }
+}
+
+/// Pins ancestor `UIScrollView` contentOffsets once a duration drag
+/// is **active**. Never sets `isScrollEnabled = false` on touch-down
+/// (`a0da6ed` cancelled the pan). Does not flip `pointerCaptured` /
+/// `scrollDisabled` (that rebuilds the hour scroller).
+struct ScrollOffsetLockBridge: UIViewRepresentable {
+    var locked: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeUIView(context: Context) -> BridgeView {
+        let view = BridgeView()
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        context.coordinator.view = view
+        return view
+    }
+
+    func updateUIView(_ uiView: BridgeView, context: Context) {
+        context.coordinator.view = uiView
+        context.coordinator.setLocked(locked)
+    }
+
+    final class Coordinator: NSObject {
+        weak var view: BridgeView?
+        private var frozen: [(UIScrollView, CGPoint)] = []
+        private var link: CADisplayLink?
+        private var isLocked = false
+
+        deinit {
+            stopLink()
+        }
+
+        func setLocked(_ locked: Bool) {
+            if locked {
+                isLocked = true
+                if frozen.isEmpty {
+                    capture()
+                }
+                restore()
+                startLink()
+            } else {
+                isLocked = false
+                stopLink()
+                restore()
+                frozen = []
+            }
+        }
+
+        private func capture() {
+            var found: [(UIScrollView, CGPoint)] = []
+            var current: UIView? = view
+            while let node = current {
+                if let scroll = node as? UIScrollView {
+                    found.append((scroll, scroll.contentOffset))
+                }
+                current = node.superview
+            }
+            frozen = found
+        }
+
+        @objc func tick() {
+            if frozen.isEmpty {
+                capture()
+            }
+            restore()
+        }
+
+        private func restore() {
+            for (scroll, offset) in frozen where scroll.contentOffset != offset {
+                scroll.setContentOffset(offset, animated: false)
+            }
+        }
+
+        private func startLink() {
+            guard link == nil else { return }
+            let displayLink = CADisplayLink(target: self, selector: #selector(tick))
+            displayLink.add(to: .main, forMode: .common)
+            link = displayLink
+        }
+
+        private func stopLink() {
+            link?.invalidate()
+            link = nil
+        }
+    }
+
+    final class BridgeView: UIView {
         override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
             nil
         }

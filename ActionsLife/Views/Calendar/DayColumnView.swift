@@ -7,21 +7,33 @@ struct DayColumnView: View {
     let pixelsPerHour: Double
     let columnWidth: CGFloat
     @Binding var selectedTaskID: String?
+    @Binding var calendarComposer: CalendarComposer?
+    @Binding var composerText: String
+    var onCommitComposer: () -> Void
+    var onCancelComposer: () -> Void
+    var showsHeader: Bool = true
+    var showsTimedCanvas: Bool = true
     @Environment(HomeChrome.self) private var chrome
 
     private var hourHeight: CGFloat { CalendarLayout.hourHeight(pixelsPerHour: pixelsPerHour) }
     private var canvasHeight: CGFloat { CalendarLayout.canvasHeight(pixelsPerHour: pixelsPerHour) }
     private var split: (allDay: [TaskSnapshot], timed: [TaskSnapshot]) { CalendarLayout.split(tasks: tasks) }
     private var placed: [CalendarLayout.PlacedEvent] {
-        CalendarLayout.placeTimed(split.timed, pixelsPerHour: pixelsPerHour)
+        var timed = split.timed
+        if let session = chrome.durationResize,
+           let index = timed.firstIndex(where: { $0.id == session.taskID })
+        {
+            timed[index].duration = session.previewDuration
+        }
+        return CalendarLayout.placeTimed(timed, pixelsPerHour: pixelsPerHour)
     }
     private var dayISO: String { DateISO.dayString(from: day) }
     private var isToday: Bool { Calendar.current.isDateInToday(day) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-            timedCanvas
+            if showsHeader { header }
+            if showsTimedCanvas { timedCanvas }
         }
         .frame(width: columnWidth)
         .background(Theme.calendarBackground)
@@ -42,6 +54,10 @@ struct DayColumnView: View {
             .font(.subheadline.weight(.medium))
             .foregroundStyle(Theme.ink)
             .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: beginAllDayComposer)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel("Add all-day task")
 
             VStack(spacing: 4) {
                 ForEach(split.allDay) { task in
@@ -51,6 +67,7 @@ struct DayColumnView: View {
                         compact: true,
                         onToggle: { store.toggleDone(task.id) },
                         onOpen: { selectedTaskID = task.id },
+                        onToggleChild: { store.toggleDone($0) },
                         onDrop: { store.applyDrop($0, taskID: task.id, fromCalendar: true) }
                     )
                 }
@@ -58,6 +75,23 @@ struct DayColumnView: View {
                     CalendarDropPreview(height: 12)
                         .padding(.horizontal, 6)
                 }
+                if case .allDay(let iso) = calendarComposer, iso == dayISO {
+                    InlineTaskComposer(
+                        text: $composerText,
+                        font: .subheadline,
+                        onSubmit: onCommitComposer,
+                        onCancel: onCancelComposer
+                    )
+                    .padding(.horizontal, 6)
+                    .zIndex(4)
+                }
+                Color.primary.opacity(0.001)
+                    .frame(height: 28)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: beginAllDayComposer)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel("Add all-day task")
             }
             .padding(.horizontal, 6)
         }
@@ -72,20 +106,39 @@ struct DayColumnView: View {
         ZStack(alignment: .topLeading) {
             hourGrid
             ForEach(placed) { event in
-                CalendarEventCard(
-                    task: event.task,
-                    children: store.children(of: event.task.id),
-                    onToggle: { store.toggleDone(event.task.id) },
-                    onOpen: { selectedTaskID = event.task.id },
-                    onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) }
-                )
-                .frame(width: columnWidth - 12, height: max(event.height, 36), alignment: .top)
-                .position(x: columnWidth / 2, y: event.y + max(event.height, 36) / 2)
+                // Place a **card-sized** child at `blockFrame.origin` so the
+                // UIView sits on the painted pixels. Spacer / padding / offset
+                // leave the UIView at hour 0 (`2098eca` hitTest missed). Do
+                // not wrap cards in a canvas-height `TimedCardLayout` (`adce52c`).
+                let frame = CalendarLayout.blockFrame(event: event, columnWidth: columnWidth)
+                BlockFrameCardLayout(frame: frame) {
+                    CalendarEventCard(
+                        task: event.task,
+                        children: store.children(of: event.task.id),
+                        onToggle: { store.toggleDone(event.task.id) },
+                        onOpen: { selectedTaskID = event.task.id },
+                        onToggleChild: { store.toggleDone($0) },
+                        onDrop: { store.applyDrop($0, taskID: event.task.id, fromCalendar: true) }
+                    )
+                    .frame(width: frame.width, height: frame.height, alignment: .top)
+                }
+                .contentShape(Path(frame))
             }
             if let preview = chrome.timedPreview(for: dayISO) {
                 CalendarDropPreview(height: preview.height)
                     .padding(.horizontal, 6)
                     .offset(y: preview.y)
+            }
+            if case .timed(let iso, let minutes) = calendarComposer, iso == dayISO {
+                InlineTaskComposer(
+                    text: $composerText,
+                    font: .subheadline,
+                    onSubmit: onCommitComposer,
+                    onCancel: onCancelComposer
+                )
+                .padding(.horizontal, 6)
+                .offset(y: CalendarLayout.y(fromMinutes: minutes, pixelsPerHour: pixelsPerHour))
+                .zIndex(8)
             }
             if isToday {
                 nowIndicator
@@ -108,6 +161,35 @@ struct DayColumnView: View {
                 .frame(height: hourHeight)
             }
         }
+        .contentShape(Rectangle())
+        .gesture(
+            SpatialTapGesture().onEnded { event in
+                guard chrome.drag == nil, !chrome.isResizing, chrome.durationResize == nil else { return }
+                if let hit = placed.first(where: {
+                    CalendarLayout.blockContains(location: event.location, event: $0, columnWidth: columnWidth)
+                }) {
+                    let capsule = CalendarLayout.durationCapsuleRect(
+                        columnIndex: 0,
+                        columnWidth: columnWidth,
+                        event: hit
+                    )
+                    if CalendarLayout.touchHitsCapsule(event.location, capsule: capsule) {
+                        return
+                    }
+                    selectedTaskID = hit.task.id
+                    return
+                }
+                let minutes = CalendarLayout.minutes(
+                    atY: event.location.y,
+                    pixelsPerHour: pixelsPerHour,
+                    snap: chrome.snapInterval
+                )
+                composerText = ""
+                calendarComposer = .timed(dayISO: dayISO, minutes: minutes)
+            }
+        )
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("Add timed task")
     }
 
     private var nowIndicator: some View {
@@ -125,5 +207,32 @@ struct DayColumnView: View {
         }
         .frame(height: canvasHeight, alignment: .top)
         .allowsHitTesting(false)
+    }
+
+    private func beginAllDayComposer() {
+        guard chrome.drag == nil, !chrome.isResizing, chrome.durationResize == nil else { return }
+        composerText = ""
+        calendarComposer = .allDay(dayISO: dayISO)
+    }
+}
+
+/// Places one **card-sized** child at `blockFrame.origin`. Height is the
+/// block bottom, not the 24-hour canvas (`adce52c` host). Empty hours above
+/// the block are not a card; `hitTest` there stays timed create.
+private struct BlockFrameCardLayout: Layout {
+    var frame: CGRect
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
+        CGSize(width: frame.maxX, height: frame.maxY)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
+        for subview in subviews {
+            subview.place(
+                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: frame.width, height: frame.height)
+            )
+        }
     }
 }
