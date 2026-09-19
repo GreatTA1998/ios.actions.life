@@ -1101,6 +1101,73 @@ final class CalendarLayoutTests: XCTestCase {
         XCTAssertEqual(storeWrites[0].1, minutes, accuracy: 0.01)
     }
 
+    func testLockOffsetFollowWritesSetDurationBeforeDropClaim() {
+        // `fc366c5`: hours stayed during +80 (lockOffsets / follow). Handle
+        // `touchesEnded` may never run. The pin tick that holds hours must
+        // write `TaskTreeStore.setDuration` for the painted card id while
+        // the finger is at +80, before `dropClaim()`. Do not write 30.
+        var storeWrites: [(String, Double)] = []
+        let pixels = 50.0
+        let beganWindowY: CGFloat = 344
+        let fingerWindowY: CGFloat = 344 + 80
+        let minutes = CalendarLayout.paintedHandleMinutes(
+            start: 30,
+            windowDeltaY: 80,
+            pixelsPerHour: pixels
+        )
+        XCTAssertEqual(minutes, 30 + 80 / 50 * 60, accuracy: 0.01)
+        XCTAssertGreaterThan(minutes, 30)
+
+        let bridge = HourDurationPanBridge(
+            enabled: true,
+            liveColumns: { [] },
+            headerHeight: 0,
+            columnWidth: 220,
+            pixelsPerHour: pixels,
+            snap: 15,
+            onTimedCreate: { _, _ in },
+            onOpenDetails: { _ in },
+            onBegan: { _ in },
+            onChanged: { _, _ in
+                XCTFail("live store write must not fall back to onChanged")
+            },
+            onEnded: { _, _ in },
+            onCancel: {}
+        )
+        let coordinator = HourDurationPanBridge.Coordinator(parent: bridge)
+        coordinator.bindStoreWrites(from: bridge)
+        coordinator.installLiveSetDuration { id, value in
+            storeWrites.append((id, value))
+        }
+        coordinator.bindClaimedHandleForTest(
+            taskID: "pr3",
+            startDuration: 30,
+            beganWindowY: beganWindowY
+        )
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 390, height: 400))
+        scroll.contentSize = CGSize(width: 390, height: 1200)
+        scroll.contentOffset = CGPoint(x: 0, y: 305.3)
+        coordinator.lockOffsets(from: scroll)
+        XCTAssertTrue(coordinator.hasPinnedClaim(), "hours stay during the +80 drag")
+
+        coordinator.followWhileHoursPinned(windowY: beganWindowY)
+        XCTAssertTrue(storeWrites.isEmpty, "touch-down must not write 30")
+        XCTAssertTrue(coordinator.hasPinnedClaim())
+
+        coordinator.followWhileHoursPinned(windowY: fingerWindowY)
+        XCTAssertEqual(storeWrites.count, 1)
+        XCTAssertEqual(storeWrites[0].0, "pr3")
+        XCTAssertEqual(storeWrites[0].1, minutes, accuracy: 0.01)
+        XCTAssertGreaterThan(storeWrites[0].1, 30)
+        XCTAssertTrue(coordinator.hasPinnedClaim(), "pin holds through the write")
+        XCTAssertEqual(scroll.contentOffset.y, 305.3, accuracy: 0.01)
+
+        coordinator.dropClaim()
+        XCTAssertFalse(coordinator.hasPinnedClaim(), "dropClaim() unpins only")
+        XCTAssertEqual(storeWrites.count, 1, "dropClaim() must not write 30")
+        XCTAssertEqual(storeWrites[0].1, minutes, accuracy: 0.01)
+    }
+
     func testTitleStaticTextIsDetailsNotDurationHandle() {
         // `b8f1337`: StaticText `calendar.timed.*` `(87.3, 312.7, 122.7, 18)`
         // must stay Details. Duration is only the 16pt handle below the title.

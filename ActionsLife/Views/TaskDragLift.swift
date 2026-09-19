@@ -614,6 +614,10 @@ struct HourDurationPanBridge: UIViewRepresentable {
         /// (`00f3382` `touchesMoved` / display-link never ran).
         private var observingHourPan = false
         private weak var observedHourPan: UIPanGestureRecognizer?
+        /// `writeStoreDuration` → `restoreLockedOffsets` re-entry.
+        private var isWritingPinnedFollow = false
+        /// Unit hook for the pin-follow write (`fc366c5` lift never grew).
+        private var pinnedFollowWindowY: CGFloat?
 
         init(parent: HourDurationPanBridge) {
             self.parent = parent
@@ -759,6 +763,11 @@ struct HourDurationPanBridge: UIViewRepresentable {
             // whole `calendar.timed.*` card / StaticText title.
             startDurationSession(scroll: scroll, touch: touch)
             attachHourPanFollow(to: scroll)
+            // Same ticker as the pin that keeps hours put. XCUI +80 may
+            // never hit handle `touchesEnded` (`fc366c5`).
+            if followTaskID() != nil {
+                beginFollowing(touch)
+            }
         }
 
         /// Same pin that holds hours: start the duration session so follow
@@ -822,6 +831,15 @@ struct HourDurationPanBridge: UIViewRepresentable {
         func followClaimedHourScroller(windowY: CGFloat, ended: Bool) {
             writeStoreDuration(locationY: windowY, ended: ended)
             restoreLockedOffsets()
+        }
+
+        /// Pin-follow tick: `setDuration` from window Y while hours stay,
+        /// before `dropClaim()`. `dropClaim()` still only unpins.
+        func followWhileHoursPinned(windowY: CGFloat) {
+            pinnedFollowWindowY = windowY
+            restoreLockedOffsets()
+            writeDurationFromPinnedFollow()
+            pinnedFollowWindowY = nil
         }
 
         /// XCUITest / unit hook: same path `touchesMoved` uses after the
@@ -928,15 +946,16 @@ struct HourDurationPanBridge: UIViewRepresentable {
         /// drag, then `dropClaim()` on lift. Do not only pin `contentOffset`.
         @objc func hourScrollerPanFollowed(_ gesture: UIGestureRecognizer) {
             guard followTaskID() != nil else { return }
-            // Window `UITouch` Y vs touch-down Y. Never `location(in: nil)`.
+            // `touch.location(in: touch.window)` vs touch-down — not the
+            // pinned hour-pan location (`099543c` / `fc366c5` delta 0).
             restoreLockedOffsets()
-            guard let y = windowLocationY(of: gesture) else {
+            guard let y = claimedHourPanWindowY() ?? windowLocationY(of: gesture) else {
                 restoreLockedOffsets()
                 return
             }
             switch gesture.state {
             case .began, .changed:
-                followClaimedHourScroller(windowY: y, ended: false)
+                followWhileHoursPinned(windowY: y)
             case .ended, .cancelled:
                 finishClaimedHourPan(windowY: y)
             case .failed:
@@ -989,8 +1008,7 @@ struct HourDurationPanBridge: UIViewRepresentable {
             // `.cancelled` is the handle-edge / recognizer death — the
             // XCUI finger is still down +80 pt below the card. Do not
             // commit or `dropClaim()` here (`28ee931` froze at 35 min).
-            writeStoreDuration(locationY: y, ended: false)
-            restoreLockedOffsets()
+            followWhileHoursPinned(windowY: y)
         }
 
         /// Window Y from the handle `UITouch`, then the hour scroller pan
@@ -1175,6 +1193,25 @@ struct HourDurationPanBridge: UIViewRepresentable {
             for (scroll, offset) in lockedOffsets where scroll.contentOffset != offset {
                 scroll.setContentOffset(offset, animated: false)
             }
+        }
+
+        /// `30 + (touch.window.y − began) / hourHeight * 60` for the
+        /// painted `calendar.timed.*` id. Skip delta < 1 (do not write 30).
+        func writeDurationFromPinnedFollow() {
+            guard !isWritingPinnedFollow else { return }
+            guard followTaskID() != nil else { return }
+            let y: CGFloat
+            if let override = pinnedFollowWindowY {
+                y = override
+            } else if let touch = trackedTouch, let touchY = windowY(of: touch) {
+                y = touchY
+            } else {
+                return
+            }
+            guard let began = beganWindowY, abs(y - began) >= 1 else { return }
+            isWritingPinnedFollow = true
+            writeStoreDuration(locationY: y, ended: false)
+            isWritingPinnedFollow = false
         }
 
         /// Unpin `contentOffset` and restore `canCancelContentTouches` so hours
