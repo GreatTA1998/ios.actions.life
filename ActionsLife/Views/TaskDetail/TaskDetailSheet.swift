@@ -102,6 +102,16 @@ struct TaskDetailSheet: View {
             }
             .navigationTitle("Details")
             .navigationBarTitleDisplayMode(.inline)
+            .userActivity("life.actions.ios.openEvent") { activity in
+                if let record = store.task(id: taskID) {
+                    activity.title = record.name.isEmpty ? "Event" : record.name
+                    activity.persistentIdentifier = taskID
+                    activity.userInfo = ["taskID": taskID, "dayISO": record.startDateISO]
+                    activity.isEligibleForHandoff = false
+                    activity.isEligibleForSearch = true
+                    activity.isEligibleForPrediction = true
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
