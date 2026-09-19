@@ -3,62 +3,78 @@ import SwiftUI
 struct InboxView: View {
     @Bindable var store: TaskTreeStore
     @Binding var selectedTaskID: String?
-    var onAddRoot: () -> Void
-    var onAddChild: (String) -> Void
+    @Binding var composer: ComposerSlot?
+    @Binding var composerText: String
+    var onCommitComposer: () -> Void
+    var onCancelComposer: () -> Void
     @Environment(HomeChrome.self) private var chrome
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Spacer()
-                Button(action: onAddRoot) {
-                    Image(systemName: "plus")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(Theme.ink)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(store.inbox.enumerated()), id: \.element.id) { index, tree in
+                    composerOrDropzone(parentID: "", index: index, isRoot: true)
+                    TaskRowView(
+                        tree: tree,
+                        depth: 0,
+                        store: store,
+                        selectedTaskID: $selectedTaskID,
+                        composer: $composer,
+                        composerText: $composerText,
+                        onCommitComposer: onCommitComposer,
+                        onCancelComposer: onCancelComposer
+                    )
                 }
-                .accessibilityLabel("Add task")
+                composerOrDropzone(
+                    parentID: "",
+                    index: store.inbox.count,
+                    isRoot: true,
+                    fillRemaining: true
+                )
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 4)
-            .padding(.bottom, 2)
-
-            if store.inbox.isEmpty {
-                ContentUnavailableView {
-                    Label("Nothing on the list", systemImage: "checklist")
-                } description: {
-                    Text("Add a task, then open it to nest subtasks or put it on a day.")
-                } actions: {
-                    Button("Add task", action: onAddRoot)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(store.inbox) { tree in
-                            TaskRowView(
-                                tree: tree,
-                                depth: 0,
-                                store: store,
-                                selectedTaskID: $selectedTaskID,
-                                onAddChild: onAddChild
-                            )
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 28)
-                }
-                .scrollDisabled(chrome.pointerCaptured)
-            }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 28)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .background(Theme.listBackground)
-        .overlay {
-            if chrome.showsListPreview() {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Theme.dragPreview.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
-                    .padding(8)
+        .scrollDisabled(chrome.pointerCaptured)
+        .overlay(alignment: .center) {
+            if store.inbox.isEmpty, composer == nil {
+                Text("Tap a gap to add a task")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.secondaryInk)
                     .allowsHitTesting(false)
             }
         }
+        .background(Theme.listBackground)
         .background { DropZoneReporter(kind: .list) }
+    }
+
+    @ViewBuilder
+    private func composerOrDropzone(
+        parentID: String,
+        index: Int,
+        isRoot: Bool,
+        fillRemaining: Bool = false
+    ) -> some View {
+        if composer == ComposerSlot(parentID: parentID, index: index) {
+            InlineTaskComposer(
+                text: $composerText,
+                font: isRoot ? .body.weight(.medium) : .subheadline,
+                onSubmit: onCommitComposer,
+                onCancel: onCancelComposer
+            )
+            .padding(.leading, isRoot ? 0 : 18)
+        } else {
+            ListDropzone(
+                parentID: parentID,
+                index: index,
+                isRoot: isRoot,
+                fillRemaining: fillRemaining
+            ) {
+                composerText = ""
+                composer = ComposerSlot(parentID: parentID, index: index)
+            }
+        }
     }
 }

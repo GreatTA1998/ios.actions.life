@@ -60,14 +60,20 @@ final class TaskTreeStore {
         id: String? = nil,
         childrenLayout: String = "normal",
         isDone: Bool = false,
-        imageDownloadURL: String = ""
+        imageDownloadURL: String = "",
+        insertIndex: Int? = nil
     ) -> TaskRecord {
-        let order = TreeMaintenance.nextOrderValue(maxOrderValue: profile?.maxOrderValue ?? 10)
-        var snapshots = allSnapshots
+        let siblings = allSnapshots
+            .filter { $0.parentID == parentID }
+            .sorted { $0.orderValue < $1.orderValue }
+        let order = TreeMaintenance.orderValue(
+            insertingAt: insertIndex ?? siblings.count,
+            among: siblings
+        )
         let newID = id ?? UUID().uuidString.replacingOccurrences(of: "-", with: "")
         var rootID = newID
         var treeISOs = [startDateISO].filter { !$0.isEmpty }
-        if !parentID.isEmpty, let parent = snapshots.first(where: { $0.id == parentID }) {
+        if !parentID.isEmpty, let parent = allSnapshots.first(where: { $0.id == parentID }) {
             rootID = parent.rootID
             treeISOs = parent.treeISOs
             if !startDateISO.isEmpty {
@@ -93,6 +99,9 @@ final class TaskTreeStore {
             rootID: rootID
         )
         context.insert(record)
+        if !startDateISO.isEmpty {
+            lastScheduledISO = startDateISO
+        }
 
         if !parentID.isEmpty, !startDateISO.isEmpty {
             applySnapshotsAfter { docs in
@@ -145,17 +154,44 @@ final class TaskTreeStore {
         save()
     }
 
-    func applyDrop(_ target: HomeChrome.DropTarget, taskID: String) {
+    func applyDrop(_ target: HomeChrome.DropTarget, taskID: String, fromCalendar: Bool = false) {
         switch target {
         case .none:
             break
         case .list:
-            clearSchedule(taskID)
+            placeOnList(taskID, parentID: "", index: siblingCount(parentID: "", excluding: taskID), unschedule: fromCalendar)
+        case .listSlot(let parentID, let index):
+            placeOnList(taskID, parentID: parentID, index: index, unschedule: fromCalendar)
+        case .nest(let parentID):
+            guard parentID != taskID else { return }
+            placeOnList(taskID, parentID: parentID, index: 0, unschedule: fromCalendar)
         case .allDay(let dayISO):
             schedule(taskID, dayISO: dayISO, time: "")
         case .timed(let dayISO, let minutes):
             schedule(taskID, dayISO: dayISO, time: CalendarLayout.clock(fromMinutes: minutes))
         }
+    }
+
+    func placeOnList(_ taskID: String, parentID: String, index: Int, unschedule: Bool) {
+        let rooms = allSnapshots
+            .filter { $0.parentID == parentID && $0.id != taskID }
+            .sorted { $0.orderValue < $1.orderValue }
+        let order = TreeMaintenance.orderValue(insertingAt: index, among: rooms)
+        applySnapshotsAfter { docs in
+            TreeMaintenance.applyPlaceOnList(
+                taskID: taskID,
+                parentID: parentID,
+                orderValue: order,
+                unschedule: unschedule,
+                docs: &docs
+            )
+        }
+        sync.enqueue(uid: uid, kind: .batchTree, collection: "tasks", documentID: taskID)
+        save()
+    }
+
+    private func siblingCount(parentID: String, excluding taskID: String) -> Int {
+        allSnapshots.filter { $0.parentID == parentID && $0.id != taskID }.count
     }
 
     func clearSchedule(_ id: String) {
@@ -221,12 +257,12 @@ final class TaskTreeStore {
         save()
     }
 
-    func addSubtask(under parentID: String, name: String) {
-        create(name: name, parentID: parentID, onList: true)
+    func addSubtask(under parentID: String, name: String, insertIndex: Int? = nil) {
+        create(name: name, parentID: parentID, onList: true, insertIndex: insertIndex)
     }
 
-    func setListHeightSplit(_ value: Double) {
-        listHeightSplit = min(0.85, max(0.25, value))
+    func setListHeightSplit(_ value: Double, height: CGFloat = 800) {
+        listHeightSplit = HomeChrome.clampSplitFraction(value, height: height)
         if let profile {
             profile.listHeightSplit = listHeightSplit
             profile.updatedAt = .now
@@ -234,8 +270,8 @@ final class TaskTreeStore {
         try? context.save()
     }
 
-    func setListHeightSplitLive(_ value: Double) {
-        listHeightSplit = min(0.85, max(0.25, value))
+    func setListHeightSplitLive(_ value: Double, height: CGFloat = 800) {
+        listHeightSplit = HomeChrome.clampSplitFraction(value, height: height)
     }
 
     func seedGuestDataIfNeeded() {

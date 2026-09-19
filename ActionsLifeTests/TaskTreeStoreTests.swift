@@ -82,4 +82,68 @@ final class TaskTreeStoreTests: XCTestCase {
         XCTAssertEqual(CalendarLayout.split(tasks: store.tasks(on: "2026-09-26")).timed.map(\.id), [task.id])
         XCTAssertEqual(store.lastScheduledISO, "2026-09-26")
     }
+
+    func testCreateInsertsAtDropzoneIndexAndNestDropMakesSubtask() throws {
+        let container = Persistence.makeContainer(inMemory: true, name: "dropzone-create")
+        let context = ModelContext(container)
+        context.insert(UserProfile(uid: "slot-user"))
+        try context.save()
+
+        let store = TaskTreeStore(context: context, uid: "slot-user")
+        store.create(name: "First")
+        store.create(name: "Third")
+        store.create(name: "Second", insertIndex: 1)
+        XCTAssertEqual(store.inbox.map(\.task.name), ["First", "Second", "Third"])
+
+        let child = store.create(name: "Nested later")
+        store.applyDrop(.nest(store.inbox[0].id), taskID: child.id)
+        XCTAssertEqual(store.inbox.map(\.task.name), ["First", "Second", "Third"])
+        XCTAssertEqual(store.inbox[0].children.map(\.task.name), ["Nested later"])
+    }
+
+    func testCalendarTapCreateStaysOffTheList() throws {
+        let container = Persistence.makeContainer(inMemory: true, name: "cal-create")
+        let context = ModelContext(container)
+        context.insert(UserProfile(uid: "cal-user"))
+        try context.save()
+
+        let store = TaskTreeStore(context: context, uid: "cal-user")
+        let timed = store.create(
+            name: "Focus",
+            onList: false,
+            startDateISO: "2026-09-18",
+            startTime: "10:30"
+        )
+        let allDay = store.create(
+            name: "Visa day",
+            onList: false,
+            startDateISO: "2026-09-18",
+            startTime: ""
+        )
+
+        XCTAssertTrue(store.inbox.isEmpty)
+        XCTAssertEqual(store.tasks(on: "2026-09-18").map(\.id), [timed.id, allDay.id])
+        let split = CalendarLayout.split(tasks: store.tasks(on: "2026-09-18"))
+        XCTAssertEqual(split.allDay.map(\.id), [allDay.id])
+        XCTAssertEqual(split.timed.map(\.id), [timed.id])
+        XCTAssertEqual(store.lastScheduledISO, "2026-09-18")
+    }
+
+    func testDurationResizeSnapsAndPersists() throws {
+        let container = Persistence.makeContainer(inMemory: true, name: "duration-resize")
+        let context = ModelContext(container)
+        context.insert(UserProfile(uid: "dur-user"))
+        try context.save()
+
+        let store = TaskTreeStore(context: context, uid: "dur-user")
+        let task = store.create(
+            name: "Block",
+            onList: false,
+            startDateISO: "2026-09-18",
+            startTime: "09:00",
+            duration: 30
+        )
+        store.setDuration(task.id, minutes: CalendarLayout.snapDuration(52, snap: 15))
+        XCTAssertEqual(store.task(id: task.id)?.duration, 45)
+    }
 }
