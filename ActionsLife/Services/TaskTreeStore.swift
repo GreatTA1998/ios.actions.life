@@ -291,11 +291,13 @@ final class TaskTreeStore {
         record.updatedAt = .now
         sync.enqueue(uid: uid, kind: .update, collection: "tasks", documentID: id)
         try? context.save()
+        EventIndex.scheduleSync(snapshots: fetchRecords().map { $0.snapshot() })
     }
 
     func persistVisibleState() {
         try? context.save()
         reload()
+        EventIndex.scheduleSync(snapshots: allSnapshots)
     }
 
     private func update(_ id: String, mutate: (TaskRecord) -> Void) {
@@ -331,6 +333,7 @@ final class TaskTreeStore {
     private func save() {
         try? context.save()
         reload()
+        EventIndex.scheduleSync(snapshots: allSnapshots)
     }
 
     private func fetchRecords() -> [TaskRecord] {
