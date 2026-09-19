@@ -650,7 +650,13 @@ struct HoldThenDragBridge: UIViewRepresentable {
             _ gestureRecognizer: UIGestureRecognizer,
             shouldReceive touch: UITouch
         ) -> Bool {
-            HoldThenDragPolicy.shouldReceive(
+            if let view = gestureRecognizer.view {
+                let y = touch.location(in: view).y
+                if y > view.bounds.height - HomeChrome.durationHandleHit {
+                    return false
+                }
+            }
+            return HoldThenDragPolicy.shouldReceive(
                 enabled: parent.enabled,
                 finger: touch.location(in: nil),
                 rowFrame: resolvedRowFrame()
@@ -684,7 +690,7 @@ struct HoldThenDragBridge: UIViewRepresentable {
         }
 
         /// Stop an in-flight pan so a just-lifted ghost is not also a list scroll.
-        private func haltEnclosingScroll() {
+        private         func haltEnclosingScroll() {
             var view: UIView? = installer
             while let current = view {
                 if let scroll = current as? UIScrollView {
@@ -699,12 +705,6 @@ struct HoldThenDragBridge: UIViewRepresentable {
                 }
                 view = current.superview
             }
-        }
-
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            guard let view = gestureRecognizer.view else { return true }
-            let y = touch.location(in: view).y
-            return y <= view.bounds.height - HomeChrome.durationHandleHit
         }
     }
 

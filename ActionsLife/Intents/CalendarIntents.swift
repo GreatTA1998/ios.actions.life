@@ -293,30 +293,29 @@ struct OpenEventIntent: OpenIntent {
 }
 
 struct ActionsLifeShortcuts: AppShortcutsProvider {
-    static var shortcutTileColor: ShortcutTileColor = .forestGreen
+    static var shortcutTileColor: ShortcutTileColor = .lime
 
+    @AppShortcutsBuilder
     static var appShortcuts: [AppShortcut] {
-        [
-            AppShortcut(
-                intent: CreateEventIntent(),
-                phrases: [
-                    "Schedule an event in \(.applicationName)",
-                    "Create an event in \(.applicationName)",
-                    "Add an event to \(.applicationName)"
-                ],
-                shortTitle: "Schedule event",
-                systemImageName: "calendar.badge.plus"
-            ),
-            AppShortcut(
-                intent: ListDayEventsIntent(),
-                phrases: [
-                    "What events do I have in \(.applicationName)",
-                    "What's on my \(.applicationName) calendar today"
-                ],
-                shortTitle: "Today's events",
-                systemImageName: "calendar"
-            )
-        ]
+        AppShortcut(
+            intent: CreateEventIntent(),
+            phrases: [
+                "Schedule an event in \(.applicationName)",
+                "Create an event in \(.applicationName)",
+                "Add an event to \(.applicationName)"
+            ],
+            shortTitle: "Schedule event",
+            systemImageName: "calendar.badge.plus"
+        )
+        AppShortcut(
+            intent: ListDayEventsIntent(),
+            phrases: [
+                "What events do I have in \(.applicationName)",
+                "What's on my \(.applicationName) calendar today"
+            ],
+            shortTitle: "Today's events",
+            systemImageName: "calendar"
+        )
     }
 }
 
